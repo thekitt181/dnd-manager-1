@@ -41,18 +41,19 @@ export async function removeBackground(imageBuffer) {
             transparentCount++;
             continue;
         }
-        // Relaxed threshold for white
-        if (p.r > 200 && p.g > 200 && p.b > 200) {
+        // Relaxed threshold for white - expanded range for generated images
+        if (p.r > 180 && p.g > 180 && p.b > 180) {
             whiteCount++;
             avgR += p.r; avgG += p.g; avgB += p.b;
-        } else if (p.r < 50 && p.g < 50 && p.b < 50) {
+        } else if (p.r < 80 && p.g < 80 && p.b < 80) { // Expanded black range
             blackCount++;
         }
     }
 
     let targetMode = null;
-    const whiteThreshold = totalSamples * 0.4;
-    const blackThreshold = totalSamples * 0.4;
+    // Lower threshold to 25% to catch partial backgrounds
+    const whiteThreshold = totalSamples * 0.25;
+    const blackThreshold = totalSamples * 0.25;
 
     if (transparentCount > totalSamples * 0.9) {
         // Already transparent
@@ -70,7 +71,8 @@ export async function removeBackground(imageBuffer) {
     if (targetMode) {
         // console.log(`Detected ${targetMode} background. AvgColor: ${avgR},${avgG},${avgB}. Removing...`);
         
-        const tolerance = 60;
+        // Increased tolerance for generated images
+        const tolerance = 90;
         const queue = [];
         const visited = new Uint8Array(w * h);
         

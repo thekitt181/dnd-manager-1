@@ -31,7 +31,7 @@ async function generatePromptWithLLM(monster, cleanName) {
     ${descriptionContext}
     
     Task: Generate a single prompt string following this EXACT template:
-    "(isolated on white background:1.5), (full body shot:1.5), (perspective view:1.3), a high-quality digital 3D render of [INSERT VISUAL DESCRIPTION OF MONSTER], centered, magical fantasy style, dramatic lighting, sharp focus, intricate detail, 8k, Unreal Engine 5 render, masterpiece"
+    "(isolated on flat pure white background:1.6), (no shadow:1.4), (full body shot:1.5), (perspective view:1.3), a high-quality digital 3D render of [INSERT VISUAL DESCRIPTION OF MONSTER], centered, magical fantasy style, dramatic lighting, sharp focus, intricate detail, 8k, Unreal Engine 5 render, masterpiece"
     
     Rules:
     1. Replace [INSERT VISUAL DESCRIPTION...] with a detailed physical description of the creature.
@@ -225,12 +225,12 @@ async function generateMonsterImages() {
 
                 // 2. Fallback (Basic)
                 if (!prompt) {
-                    prompt = `(isolated on white background:1.5), (full body shot:1.5), (perspective view:1.3), a high-quality digital 3D render of ${cleanName}, ${monster.type || 'creature'}, centered, magical fantasy style, dramatic lighting, sharp focus, intricate detail, 8k, Unreal Engine 5 render, masterpiece`;
+                    prompt = `(isolated on flat pure white background:1.6), (no shadow:1.4), (full body shot:1.5), (perspective view:1.3), a high-quality digital 3D render of ${cleanName}, ${monster.type || 'creature'}, centered, magical fantasy style, dramatic lighting, sharp focus, intricate detail, 8k, Unreal Engine 5 render, masterpiece`;
                 }
 
                 console.log(`  -> Prompt: ${prompt.substring(0, 100)}...`);
 
-                const negative_prompt = ""; // Handled in generateLocalSD
+                const negative_prompt = "shadow, cast shadow, contact shadow, floor, ground, horizon, texture, vignette, dark corners, noise, grain, gradient"; // Handled in generateLocalSD
 
                 await generateLocalSD(prompt, negative_prompt, fullPath);
                 
