@@ -93,6 +93,48 @@ app.post('/api/data', async (req, res) => {
     }
 });
 
+// Image Upload Endpoint
+app.post('/api/upload-image', async (req, res) => {
+    try {
+        const { image, filename } = req.body;
+        if (!image || !image.startsWith('data:image')) {
+            return res.status(400).json({ error: 'Invalid image data' });
+        }
+
+        // Extract base64 data
+        const matches = image.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
+        if (!matches || matches.length !== 3) {
+            return res.status(400).json({ error: 'Invalid base64 string' });
+        }
+
+        const ext = matches[1];
+        const data = matches[2];
+        const buffer = Buffer.from(data, 'base64');
+        
+        const safeFilename = filename 
+            ? filename.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.' + ext
+            : `upload_${Date.now()}_${Math.floor(Math.random() * 1000)}.` + ext;
+
+        const filePath = path.join(distPath, 'images/processed', safeFilename);
+        
+        // Ensure directory exists
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)){
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, buffer);
+        
+        const fileUrl = `/images/processed/${safeFilename}`;
+        console.log(`Saved uploaded image to ${filePath}`);
+        
+        res.json({ url: fileUrl });
+    } catch (err) {
+        console.error("Upload failed:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Serve index.html for any other route (SPA support)
 app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));

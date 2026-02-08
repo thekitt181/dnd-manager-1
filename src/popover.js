@@ -3159,10 +3159,37 @@ export function searchItems(query) {
             try {
                 let finalImage = await processAndRemoveBackground(newImage);
 
-                // WARNING: Data URIs can be large. OBR sync might struggle with huge images, 
-                // but removing the 2048 limit allows background removal to actually work.
-                if (finalImage.startsWith('data:') && finalImage.length > 500000) {
-                     console.warn(`Processed image data URI is very large (${finalImage.length} chars). This might affect room performance.`);
+                // Upload if it's a data URI to avoid OBR 2048 char limit
+                if (finalImage.startsWith('data:')) {
+                     try {
+                         saveImgBtn.innerText = "Uploading...";
+                         console.log("Uploading processed image to server...");
+                         
+                         // Determine API endpoint (handle local vs production)
+                         const apiBase = window.location.origin;
+                         const response = await fetch(`${apiBase}/api/upload-image`, {
+                             method: 'POST',
+                             headers: { 'Content-Type': 'application/json' },
+                             body: JSON.stringify({ 
+                                 image: finalImage,
+                                 filename: monsterName 
+                             })
+                         });
+                         
+                         if (!response.ok) {
+                             const errText = await response.text();
+                             throw new Error(`Upload failed: ${response.status} ${errText}`);
+                         }
+                         
+                         const result = await response.json();
+                         if (result.url) {
+                             // Convert to absolute URL
+                             finalImage = new URL(result.url, apiBase).toString();
+                             console.log("Image uploaded successfully:", finalImage);
+                         }
+                     } catch (uploadErr) {
+                         console.error("Image upload failed, falling back to Data URI (may fail OBR validation):", uploadErr);
+                     }
                 }
                 
                 await saveAndApply(finalImage);
