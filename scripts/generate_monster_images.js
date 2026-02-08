@@ -117,7 +117,11 @@ async function generateLocalSD(prompt, negative_prompt, filepath) {
                     const json = JSON.parse(data);
                     if (json.images && json.images.length > 0) {
                         const buffer = Buffer.from(json.images[0], 'base64');
-                        // Remove background before saving
+                        // Save original image without background removal
+                        fs.writeFileSync(filepath, buffer);
+                        resolve();
+                        /*
+                        // Background removal disabled due to artifacts on complex backgrounds
                         removeBackground(buffer).then(pngBuffer => {
                             fs.writeFileSync(filepath, pngBuffer);
                             resolve();
@@ -126,6 +130,7 @@ async function generateLocalSD(prompt, negative_prompt, filepath) {
                              fs.writeFileSync(filepath, buffer);
                              resolve();
                         });
+                        */
                     } else {
                         reject(new Error("No images returned from Local SD"));
                     }
