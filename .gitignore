@@ -7,3 +7,4 @@ server/data.json
 debug_output/
 debug_log_*.txt
 *.traineddata
+pdfs/
