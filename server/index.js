@@ -25,7 +25,11 @@ const mongoUri = process.env.MONGODB_URI;
 let dbCollection = null;
 
 if (mongoUri) {
-    const client = new MongoClient(mongoUri);
+    const client = new MongoClient(mongoUri, {
+        tls: true,
+        serverSelectionTimeoutMS: 5000,
+        autoSelectFamily: false, // Fixes some Node 17+ IPV6 issues
+    });
     client.connect()
         .then(() => {
             console.log('Connected to MongoDB');
