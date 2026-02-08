@@ -1007,7 +1007,24 @@ export async function addMonsterToScene(monster) {
       else if (imageUrl.startsWith('data:image/webp') || imageUrl.match(/\.webp$/i)) mimeType = 'image/webp';
       
       // Size: Items are usually small/medium (150px)
-      const size = 150;
+      let finalWidth = 150;
+      let finalHeight = 150;
+      let finalDpi = 150;
+
+      // Attempt to get real dimensions to fix "warnIncorrectSize"
+      try {
+          const dims = await getImageDimensions(imageUrl);
+          if (dims && dims.width && dims.height) {
+              finalWidth = dims.width;
+              finalHeight = dims.height;
+              
+              // Calculate DPI to fit the item into 1 grid square (150 logical pixels)
+              const maxSide = Math.max(finalWidth, finalHeight);
+              finalDpi = maxSide; 
+          }
+      } catch (e) {
+          console.warn("Could not get image dimensions, using defaults", e);
+      }
       
       await new Promise((resolve, reject) => {
            OBR.onReady(() => {
@@ -1016,8 +1033,8 @@ export async function addMonsterToScene(monster) {
                      {
                          url: imageUrl,
                          mime: mimeType,
-                         width: size,
-                         height: size,
+                         width: finalWidth,
+                         height: finalHeight,
                      }
                    )
                      .position({ x: 0, y: 0 })
@@ -1037,7 +1054,7 @@ export async function addMonsterToScene(monster) {
                      .build();
 
                    // Set Grid DPI
-                   item.grid = { dpi: 150, offset: { x: 0, y: 0 } };
+                   item.grid = { dpi: finalDpi, offset: { x: 0, y: 0 } };
 
                    OBR.scene.items.addItems([item])
                      .then(() => {
