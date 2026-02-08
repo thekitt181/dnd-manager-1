@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+*.log
+server/data.json
+.DS_Store
+debug_output/
+debug_log_*.txt
+*.traineddata
