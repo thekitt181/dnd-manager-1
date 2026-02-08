@@ -1142,94 +1142,132 @@ function processAndRemoveBackground(source) {
                     const w = width;
                     const h = height;
 
-                    // --- Background Removal Logic ---
-                    const samples = [
-                        [0, 0], [w-1, 0], [0, h-1], [w-1, h-1],
-                        [Math.floor(w/2), 0], [Math.floor(w/2), h-1],
-                        [0, Math.floor(h/2)], [w-1, Math.floor(h/2)]
-                    ];
+                    // --- Improved Background Removal Logic ---
+                    // Strategy: Scan all 4 edges to determine the background color.
+                    let edgePixels = [];
+                    const addEdgeSample = (x, y) => {
+                        const idx = (y * w + x) * 4;
+                        edgePixels.push({
+                            r: data[idx], g: data[idx+1], b: data[idx+2], a: data[idx+3],
+                            idx: idx
+                        });
+                    };
 
-                    let bgR = 0, bgG = 0, bgB = 0, count = 0;
-                    let isWhite = true, isBlack = true;
+                    // Sample Top & Bottom rows
+                    for (let x = 0; x < w; x++) { addEdgeSample(x, 0); addEdgeSample(x, h-1); }
+                    // Sample Left & Right columns
+                    for (let y = 1; y < h-1; y++) { addEdgeSample(0, y); addEdgeSample(w-1, y); }
 
-                    for (const [sx, sy] of samples) {
-                        const idx = (sy * w + sx) * 4;
-                        const r = data[idx];
-                        const g = data[idx+1];
-                        const b = data[idx+2];
-                        const a = data[idx+3];
+                    let whiteCount = 0;
+                    let blackCount = 0;
+                    let transparentCount = 0;
+                    let avgR = 0, avgG = 0, avgB = 0;
+                    let totalSamples = edgePixels.length;
 
-                        if (a === 0) continue; 
-
-                        bgR += r; bgG += g; bgB += b;
-                        count++;
-
-                        if (r < 240 || g < 240 || b < 240) isWhite = false;
-                        if (r > 30 || g > 30 || b > 30) isBlack = false;
+                    for (const p of edgePixels) {
+                        if (p.a < 50) {
+                            transparentCount++;
+                            continue;
+                        }
+                        // Relaxed threshold for white (e.g. compression artifacts)
+                        if (p.r > 200 && p.g > 200 && p.b > 200) {
+                            whiteCount++;
+                            avgR += p.r; avgG += p.g; avgB += p.b;
+                        } else if (p.r < 50 && p.g < 50 && p.b < 50) {
+                            blackCount++;
+                        }
                     }
 
-                    if (count > 0) {
-                        bgR = Math.round(bgR / count);
-                        bgG = Math.round(bgG / count);
-                        bgB = Math.round(bgB / count);
+                    let targetMode = null;
+                    const whiteThreshold = totalSamples * 0.4; // If 40% of border is white, treat as white bg
+                    const blackThreshold = totalSamples * 0.4;
 
-                        const tolerance = 40;
-                        let targetMode = null;
+                    if (transparentCount > totalSamples * 0.9) {
+                        // Already transparent, skip
+                        console.log("Image border is already transparent. Skipping removal.");
+                    } else if (whiteCount > whiteThreshold) {
+                        targetMode = 'white';
+                        // Use the average of the white pixels as the reference color
+                        avgR = Math.round(avgR / whiteCount);
+                        avgG = Math.round(avgG / whiteCount);
+                        avgB = Math.round(avgB / whiteCount);
+                    } else if (blackCount > blackThreshold) {
+                        targetMode = 'black';
+                        avgR = 0; avgG = 0; avgB = 0; // Assume pure black for black mode
+                    }
 
-                        // console.log(`BG Check: AvgRGB=${bgR},${bgG},${bgB} White=${isWhite} Black=${isBlack}`);
+                    if (targetMode) {
+                        console.log(`Detected ${targetMode} background. AvgColor: ${avgR},${avgG},${avgB}. Starting removal...`);
+                        
+                        const tolerance = 60; // Increased tolerance for JPEG artifacts
+                        const queue = [];
+                        const visited = new Uint8Array(w * h);
+                        
+                        // Seed the queue with all border pixels that match the target color
+                        const checkAndSeed = (x, y) => {
+                            const idx = y * w + x;
+                            if (visited[idx]) return;
 
-                        if (isWhite || (bgR > 220 && bgG > 220 && bgB > 220)) {
-                            targetMode = 'white';
-                        } else if (isBlack || (bgR < 40 && bgG < 40 && bgB < 40)) {
-                            targetMode = 'black';
-                        }
+                            const i = idx * 4;
+                            const r = data[i];
+                            const g = data[i+1];
+                            const b = data[i+2];
+                            const a = data[i+3];
 
-                        if (targetMode) {
-                            const queue = [];
-                            const visited = new Uint8Array(w * h);
+                            if (a < 50) return; // Already transparent
+
+                            const dist = Math.abs(r - avgR) + Math.abs(g - avgG) + Math.abs(b - avgB);
                             
-                            const checkAndAdd = (x, y) => {
-                                const idx = y * w + x;
-                                if (visited[idx]) return;
-                                
-                                const i = idx * 4;
-                                const r = data[i];
-                                const g = data[i+1];
-                                const b = data[i+2];
-                                
-                                const dist = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
-                                if (dist < tolerance * 3) {
-                                    queue.push(idx);
-                                    visited[idx] = 1;
-                                }
-                            };
+                            // Stricter check for the initial seed (border) to avoid eating into the object immediately
+                            if (dist < tolerance * 1.5) {
+                                queue.push(idx);
+                                visited[idx] = 1;
+                            }
+                        };
 
-                            for (let x = 0; x < w; x++) { checkAndAdd(x, 0); checkAndAdd(x, h-1); }
-                            for (let y = 1; y < h-1; y++) { checkAndAdd(0, y); checkAndAdd(w-1, y); }
+                        // Scan edges again to seed
+                        for (let x = 0; x < w; x++) { checkAndSeed(x, 0); checkAndSeed(x, h-1); }
+                        for (let y = 1; y < h-1; y++) { checkAndSeed(0, y); checkAndSeed(w-1, y); }
 
-                            while (queue.length > 0) {
-                                const idx = queue.shift();
-                                const x = idx % w;
-                                const y = Math.floor(idx / w);
-                                const i = idx * 4;
+                        while (queue.length > 0) {
+                            const idx = queue.shift();
+                            const x = idx % w;
+                            const y = Math.floor(idx / w);
+                            const i = idx * 4;
 
-                                data[i+3] = 0; 
+                            data[i+3] = 0; // Make transparent
 
-                                const neighbors = [
-                                    {nx: x+1, ny: y}, {nx: x-1, ny: y},
-                                    {nx: x, ny: y+1}, {nx: x, ny: y-1}
-                                ];
+                            const neighbors = [
+                                {nx: x+1, ny: y}, {nx: x-1, ny: y},
+                                {nx: x, ny: y+1}, {nx: x, ny: y-1}
+                            ];
 
-                                for (const {nx, ny} of neighbors) {
-                                    if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
-                                        checkAndAdd(nx, ny);
+                            for (const {nx, ny} of neighbors) {
+                                if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                    const nIdx = ny * w + nx;
+                                    if (!visited[nIdx]) {
+                                        const ni = nIdx * 4;
+                                        const nr = data[ni];
+                                        const ng = data[ni+1];
+                                        const nb = data[ni+2];
+                                        
+                                        const dist = Math.abs(nr - avgR) + Math.abs(ng - avgG) + Math.abs(nb - avgB);
+                                        
+                                        // Standard tolerance for flood fill
+                                        if (dist < tolerance * 3) {
+                                            visited[nIdx] = 1;
+                                            queue.push(nIdx);
+                                        }
                                     }
                                 }
                             }
-                            ctx.putImageData(imageData, 0, 0);
-                            console.log(`Removed ${targetMode} background via attempt ${attemptLevel}`);
                         }
+                        ctx.putImageData(imageData, 0, 0);
+                        console.log(`Removed ${targetMode} background via attempt ${attemptLevel}`);
+                    } else {
+                        console.log("No uniform background detected on borders. Skipping.");
                     }
+
                     
                     resolve(canvas.toDataURL('image/png'));
                 } catch (e) {
@@ -3026,7 +3064,11 @@ export function searchItems(query) {
                       throw new Error("Invalid image URL. It looks like you pasted a raw JSON object. Please try extracting just the URL or use 'Select from Library'.");
                  }
 
-                 localStorage.setItem(`monster_image_${monsterName}`, imgSrc);
+                 try {
+                    localStorage.setItem(`monster_image_${monsterName}`, imgSrc);
+                 } catch (storageError) {
+                    console.warn("Failed to save image to localStorage (Quota Exceeded?):", storageError);
+                 }
                  
                  // If editing a specific item, update it immediately
                  if (itemId) {
@@ -3117,14 +3159,12 @@ export function searchItems(query) {
             try {
                 let finalImage = await processAndRemoveBackground(newImage);
 
-                if (finalImage.startsWith('data:') && finalImage.length > 2048) {
-                    console.warn(`Processed image data URI length (${finalImage.length}) exceeds OBR limit (2048). Reverting to original URL.`);
-                    alert("Background removal successful, but the resulting image data is too large for Owlbear Rodeo to store directly (limit 2048 chars).\n\nUsing original image instead.\n\nTo use transparency, please save the image locally, remove background, and upload it via the 'Select from Library' button.");
-                    finalImage = newImage;
-                } else if (finalImage === newImage && !newImage.startsWith('data:')) {
-                     alert("Note: Automatic background removal was skipped because the image host (e.g. 5e.tools) blocks external access (CORS). The original image will be used.");
+                // WARNING: Data URIs can be large. OBR sync might struggle with huge images, 
+                // but removing the 2048 limit allows background removal to actually work.
+                if (finalImage.startsWith('data:') && finalImage.length > 500000) {
+                     console.warn(`Processed image data URI is very large (${finalImage.length} chars). This might affect room performance.`);
                 }
-
+                
                 await saveAndApply(finalImage);
             } catch (e) {
                 console.error("Processing failed, using original", e);
