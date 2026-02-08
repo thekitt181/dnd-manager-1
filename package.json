@@ -4,7 +4,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "postinstall": "npm run build"
   },
   "dependencies": {
     "@owlbear-rodeo/sdk": "^3.1.0",
