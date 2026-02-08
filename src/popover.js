@@ -609,6 +609,15 @@ async function syncWithBackend() {
             });
             if (changed) localStorage.setItem('dnd_extension_deleted_items', JSON.stringify(localDeleted));
         }
+
+        if (data.images && typeof data.images === 'object') {
+            for (const [key, val] of Object.entries(data.images)) {
+                if (localStorage.getItem(key) !== val) {
+                    localStorage.setItem(key, val);
+                    changed = true;
+                }
+            }
+        }
         
         if (changed) console.log('Synced with backend');
     } catch (e) {
@@ -622,10 +631,19 @@ async function saveToBackend() {
         const items = getCustomItems();
         const deleted = getDeletedItems();
         
+        // Collect images from localStorage
+        const images = {};
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_'))) {
+                images[key] = localStorage.getItem(key);
+            }
+        }
+
         await fetch(`${API_BASE}/data`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ monsters, items, deleted })
+            body: JSON.stringify({ monsters, items, deleted, images })
         });
     } catch (e) {
         // Silent fail

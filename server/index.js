@@ -14,7 +14,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Allow large payloads for images
+app.use(express.json({ limit: '50mb' })); // Allow large payloads for images
 
 // Serve static files from dist
 const distPath = path.join(__dirname, '../dist');
@@ -80,13 +80,13 @@ app.get('/api/data', async (req, res) => {
 
 app.post('/api/data', async (req, res) => {
     try {
-        const { monsters, items, deleted } = req.body;
+        const { monsters, items, deleted, images } = req.body;
         // Validate basic structure
         if (!Array.isArray(monsters) || !Array.isArray(items)) {
             return res.status(400).json({ error: 'Invalid data format' });
         }
         
-        await saveData({ monsters, items, deleted: deleted || [], lastUpdated: new Date() });
+        await saveData({ monsters, items, deleted: deleted || [], images: images || {}, lastUpdated: new Date() });
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
