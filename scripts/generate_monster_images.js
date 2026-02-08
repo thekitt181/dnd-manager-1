@@ -1,9 +1,9 @@
 
 import fs from 'fs';
 import path from 'path';
-import https from 'https';
 import http from 'http';
 import { fileURLToPath } from 'url';
+import { removeBackground } from './utils/background_remover.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,8 +117,15 @@ async function generateLocalSD(prompt, negative_prompt, filepath) {
                     const json = JSON.parse(data);
                     if (json.images && json.images.length > 0) {
                         const buffer = Buffer.from(json.images[0], 'base64');
-                        fs.writeFileSync(filepath, buffer);
-                        resolve();
+                        // Remove background before saving
+                        removeBackground(buffer).then(pngBuffer => {
+                            fs.writeFileSync(filepath, pngBuffer);
+                            resolve();
+                        }).catch(err => {
+                             console.warn("Background removal failed, saving original:", err);
+                             fs.writeFileSync(filepath, buffer);
+                             resolve();
+                        });
                     } else {
                         reject(new Error("No images returned from Local SD"));
                     }
@@ -187,7 +194,7 @@ async function generateMonsterImages() {
 
         let cleanName = toTitleCase(monster.name).trim();
         const safeName = cleanName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-        const filename = `${safeName}.jpg`;
+        const filename = `${safeName}.png`;
         const localPath = `images/monsters/${filename}`;
         const fullPath = path.join(IMAGES_DIR, filename);
 
