@@ -1651,6 +1651,7 @@ export function searchItems(query) {
       <div id="search-view" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
         <div style="display: flex; gap: 5px; margin-bottom: 5px;">
             <input type="text" id="search-input" placeholder="Search..." style="flex: 1; padding: 5px; box-sizing: border-box;">
+            <button id="random-btn" style="display: none; padding: 0 10px; font-weight: bold; font-size: 1.2em; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px;" title="Pick Random Item">🎲</button>
             <button id="create-btn" style="padding: 0 10px; font-weight: bold; font-size: 1.2em; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px;" title="Create Custom Entry">+</button>
         </div>
         
@@ -1731,6 +1732,7 @@ export function searchItems(query) {
 
   // Editor Elements
   const createBtn = document.getElementById('create-btn');
+  const randomBtn = document.getElementById('random-btn');
   const editorView = document.getElementById('editor-view');
   const editorCancelBtn = document.getElementById('editor-cancel-btn');
   const editorSaveBtn = document.getElementById('editor-save-btn');
@@ -2154,6 +2156,7 @@ export function searchItems(query) {
           tabItems.style.background = '#f0f0f0';
           tabItems.style.fontWeight = 'normal';
           monsterFilters.style.display = 'flex';
+          if (randomBtn) randomBtn.style.display = 'none';
           input.placeholder = "Search monsters (e.g. Goblin)...";
       } else {
           tabItems.style.background = '#ddd';
@@ -2161,6 +2164,7 @@ export function searchItems(query) {
           tabMonsters.style.background = '#f0f0f0';
           tabMonsters.style.fontWeight = 'normal';
           monsterFilters.style.display = 'none';
+          if (randomBtn) randomBtn.style.display = 'block';
           input.placeholder = "Search items (e.g. Sword)...";
       }
       renderResults(input.value);
@@ -2168,6 +2172,23 @@ export function searchItems(query) {
 
   tabMonsters.addEventListener('click', () => switchTab('monsters'));
   tabItems.addEventListener('click', () => switchTab('items'));
+
+  // Random Item Logic
+  if (randomBtn) {
+      randomBtn.addEventListener('click', () => {
+          const deleted = getDeletedItems();
+          const customs = getCustomItems();
+          const builtIns = items.filter(i => !customs.some(c => c.name === i.name));
+          const allItems = [...customs, ...builtIns].filter(i => !deleted.includes(i.name));
+
+          if (allItems && allItems.length > 0) {
+              const randomItem = allItems[Math.floor(Math.random() * allItems.length)];
+              showStats(randomItem);
+          } else {
+              alert("No items found to pick from!");
+          }
+      });
+  }
 
   backBtn.addEventListener('click', () => {
     statsView.style.display = 'none';
