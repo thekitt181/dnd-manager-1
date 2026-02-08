@@ -1689,6 +1689,7 @@ export function searchItems(query) {
         
         <div style="display: flex; flex-direction: column; gap: 8px;">
             <input id="editor-name" placeholder="Name" style="padding: 5px; width: 100%; box-sizing: border-box;">
+            <input id="editor-image-url" placeholder="Image URL (optional)" style="padding: 5px; width: 100%; box-sizing: border-box;">
             
             <!-- Monster Specific -->
             <div id="editor-monster-fields" style="display: none; flex-direction: column; gap: 8px;">
@@ -1737,6 +1738,7 @@ export function searchItems(query) {
   const editorCancelBtn = document.getElementById('editor-cancel-btn');
   const editorSaveBtn = document.getElementById('editor-save-btn');
   const editorName = document.getElementById('editor-name');
+  const editorImageUrl = document.getElementById('editor-image-url');
   const editorMonsterFields = document.getElementById('editor-monster-fields');
   const editorItemFields = document.getElementById('editor-item-fields');
   
@@ -1807,6 +1809,11 @@ export function searchItems(query) {
       
       document.getElementById('editor-title-action').innerText = data ? "Edit" : "Create";
       document.getElementById('editor-title-type').innerText = mode === 'monster' ? "Monster" : "Item";
+      
+      // Load Image URL if exists
+      const imgKey = mode === 'monster' ? 'monster_image_' + (data ? data.name : '') : 'item_image_' + (data ? data.name : '');
+      const existingImg = localStorage.getItem(imgKey);
+      editorImageUrl.value = existingImg || '';
 
       if (mode === 'monster') {
           editorMonsterFields.style.display = 'flex';
@@ -1847,6 +1854,13 @@ export function searchItems(query) {
       if (!name) {
           alert("Name is required");
           return;
+      }
+
+      // Save Image URL manually if provided
+      const newImgUrl = editorImageUrl.value.trim();
+      if (newImgUrl) {
+          const imgKey = editorMode === 'monster' ? 'monster_image_' + name : 'item_image_' + name;
+          localStorage.setItem(imgKey, newImgUrl);
       }
 
       if (editorMode === 'monster') {
