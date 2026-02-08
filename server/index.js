@@ -6,6 +6,8 @@ import { MongoClient } from 'mongodb';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import http from 'http';
+import https from 'https';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,6 +138,39 @@ app.post('/api/upload-image', async (req, res) => {
     } catch (err) {
         console.error("Upload failed:", err);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// Proxy Endpoint to bypass CORS
+app.get('/api/proxy', (req, res) => {
+    const { url } = req.query;
+    if (!url) {
+        return res.status(400).json({ error: 'Missing url parameter' });
+    }
+
+    try {
+        const targetUrl = new URL(url);
+        const protocol = targetUrl.protocol === 'https:' ? https : http;
+        
+        const proxyReq = protocol.get(url, (proxyRes) => {
+            // Forward status
+            res.status(proxyRes.statusCode);
+            
+            // Forward content-type
+            if (proxyRes.headers['content-type']) {
+                res.setHeader('Content-Type', proxyRes.headers['content-type']);
+            }
+            // Ensure CORS is allowed (though global cors middleware handles this usually)
+            res.setHeader('Access-Control-Allow-Origin', '*');
+
+            proxyRes.pipe(res);
+        }).on('error', (e) => {
+            console.error(`Proxy error for ${url}:`, e);
+            res.status(500).json({ error: 'Proxy request failed', details: e.message });
+        });
+        
+    } catch (e) {
+        res.status(400).json({ error: 'Invalid URL', details: e.message });
     }
 });
 

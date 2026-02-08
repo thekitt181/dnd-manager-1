@@ -1282,7 +1282,7 @@ function processAndRemoveBackground(source) {
 
             img.onerror = (e) => {
                 console.warn(`Attempt ${attemptLevel} load failed.`, e);
-                if (attemptLevel < 2) {
+                if (attemptLevel < 3) {
                     nextAttempt(attemptLevel + 1);
                 } else {
                     console.warn("All image load attempts failed. Using original.");
@@ -1295,11 +1295,15 @@ function processAndRemoveBackground(source) {
 
         const nextAttempt = (level) => {
             if (level === 1) {
-                console.log("Retrying with corsproxy.io...");
-                tryLoadImage('https://corsproxy.io/?' + encodeURIComponent(source), 1);
+                console.log("Retrying with local proxy...");
+                // Use local proxy (relative path, works if served from same origin)
+                tryLoadImage('/api/proxy?url=' + encodeURIComponent(source), 1);
             } else if (level === 2) {
+                console.log("Retrying with corsproxy.io...");
+                tryLoadImage('https://corsproxy.io/?' + encodeURIComponent(source), 2);
+            } else if (level === 3) {
                 console.log("Retrying with allorigins.win...");
-                tryLoadImage('https://api.allorigins.win/raw?url=' + encodeURIComponent(source), 2);
+                tryLoadImage('https://api.allorigins.win/raw?url=' + encodeURIComponent(source), 3);
             }
         };
 
@@ -1320,11 +1324,14 @@ const getImageDimensions = (src) => {
             img.onload = () => resolve({ width: img.width, height: img.height });
             img.onerror = () => {
                 if (attempt === 0) {
-                    // Try corsproxy.io
-                    tryLoad('https://corsproxy.io/?' + encodeURIComponent(src), 1);
+                    // Try local proxy
+                    tryLoad('/api/proxy?url=' + encodeURIComponent(src), 1);
                 } else if (attempt === 1) {
+                    // Try corsproxy.io
+                    tryLoad('https://corsproxy.io/?' + encodeURIComponent(src), 2);
+                } else if (attempt === 2) {
                     // Try allorigins.win
-                    tryLoad('https://api.allorigins.win/raw?url=' + encodeURIComponent(src), 2);
+                    tryLoad('https://api.allorigins.win/raw?url=' + encodeURIComponent(src), 3);
                 } else {
                     // Give up
                     resolve(null);
