@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+import { removeBackground } from './utils/background_remover.js';
+
 const ITEMS_PATH = path.join(__dirname, '../src/items.json');
 const IMAGES_DIR = path.join(__dirname, '../public/images/items');
 
@@ -141,7 +143,7 @@ async function generatePromptWithLLM(item, cleanName) {
     }
 }
 
-async function generateLocalSD(prompt, negative_prompt, filepath) {
+async function generateLocalSD(prompt, negative_prompt) {
     return new Promise((resolve, reject) => {
         // Enforce strong negative prompts to prevent modern/human artifacts
         let baseNegative = "gun, rifle, pistol, revolver, firearm, sniper, modern, sci-fi, futuristic, cyber, tactical, plastic, polymer, photograph, photorealistic, camera, scope, trigger guard, clip, magazine, ammo, bullets, person, man, woman, face, hands, holding, multiple, collection, grid, text, watermark, signature, blur, blurry, low quality, bad anatomy, deformed, collage, frame, border, (icon:1.2), (ui:1.2), (symbol:1.2), architecture, building, house, home, tower, wall, room, interior, exterior, door, window, furniture, chair, table, lantern, lamp, landscape, scenery";
@@ -184,8 +186,7 @@ async function generateLocalSD(prompt, negative_prompt, filepath) {
                     const json = JSON.parse(data);
                     if (json.images && json.images.length > 0) {
                         const buffer = Buffer.from(json.images[0], 'base64');
-                        fs.writeFileSync(filepath, buffer);
-                        resolve();
+                        resolve(buffer);
                     } else {
                         reject(new Error("No images returned from Local SD"));
                     }
@@ -257,9 +258,17 @@ async function generateImages() {
         }
 
         const safeName = cleanName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-        const filename = `${safeName}.jpg`;
+        const filename = `${safeName}.png`;
         const localPath = `/images/items/${filename}`;
         const fullPath = path.join(IMAGES_DIR, filename);
+
+        // Check for existing JPG to migrate/skip
+        const jpgPath = fullPath.replace('.png', '.jpg');
+        if (fs.existsSync(jpgPath) && !fs.existsSync(fullPath)) {
+            // If JPG exists but PNG doesn't, we might want to convert it? 
+            // For now, let's treat it as "needs generation" or "needs migration"
+            // But if we are running fresh, let's just generate the PNG.
+        }
 
         // FORCE REGENERATE: Commented out the check for existing files
         if (fs.existsSync(fullPath)) {
@@ -341,10 +350,11 @@ async function generateImages() {
                 const negative_prompt = "((person)), ((human)), ((character)), ((face)), ((hands)), ((holding)), ((wearing)), ((body)), ((man)), ((woman)), multiple views, multiple angles, collage, sheet, grid, collection, set, pack, split screen, triptych, diptych, text, watermark, label, bad quality, distorted, ugly, blur, low resolution, multiple items, anatomy, cropped, lowres, error, jpeg artifacts, signature, (photorealistic:1.2), (camera:1.2), circle, round, token, medallion, coin, frame, border, badge, emblem, ui, icon, game piece, portrait, figure, skin, eyes, hair, clothing, armor, limb, arm, leg";
 
                 if (USE_LOCAL_SD) {
-                    await generateLocalSD(prompt, negative_prompt, fullPath);
-                    // Local gen is usually CPU/GPU intensive, no need for artificial delay unless cooling is needed
-                    // But we'll add a tiny one just in case
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    const rawBuffer = await generateLocalSD(prompt, negative_prompt);
+                    // Process background removal
+                    console.log("Removing background...");
+                    const processedBuffer = await removeBackground(rawBuffer);
+                    fs.writeFileSync(fullPath, processedBuffer);
                 } else {
                     // Pollinations.ai logic
                     // Add random seed to URL to look like unique requests
