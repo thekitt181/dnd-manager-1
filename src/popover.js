@@ -3385,13 +3385,48 @@ export function searchItems(query) {
                             scale: { x: 1, y: 1 }
                         };
                          
-                         if (!newItem.type) newItem.type = 'IMAGE';
-                         if (!newItem.scale) newItem.scale = { x: 1, y: 1 };
-                         if (!newItem.position) newItem.position = { x: 0, y: 0 };
+                         // Fix: OBR requires 'type' to be valid, but 'oldItem.type' might be stale or incorrect?
+                         // The error says "items[0].type must be [CURVE]... value: IMAGE".
+                         // Wait, if oldItem.type was 'CURVE' (like a drawing) we can't just change it to 'IMAGE' type via update?
+                         // Actually, addItems takes a full item definition.
+                         // The error message says: "items[0].type" must be [CURVE]... value: "IMAGE".
+                         // This implies we are trying to add an item with type 'IMAGE' but the validation expects 'CURVE'??
+                         // NO, the error is an "alternatives.match" error. It lists all possible types.
+                         // It says "items[0].type" must be [CURVE], [LABEL], [LINE], [POINTER], [RULER], [SHAPE], [TEXT], [PATH].
+                         // Notice "IMAGE" is MISSING from the valid list in the error message!
+                         // This is extremely strange because OBR definitely supports 'IMAGE'.
+                         // Ah, 'IMAGE' type is deprecated in OBR 2.0? Or maybe it's strict on casing?
+                         // Documentation says 'IMAGE' is valid.
+                         // Wait, is it possible the user is using a tool that only allows creating certain types?
+                         // No, we are using OBR.scene.items.addItems.
                          
-                         console.log("Replacing item:", oldItem.id, "with", newItem.id);
+                         // Let's try explicitly setting type to 'IMAGE' and ensuring all required fields are clean.
+                         // Maybe copying ...oldItem carries over some garbage that confuses the validator?
                          
-                         await OBR.scene.items.addItems([newItem]);
+                         const cleanItem = {
+                             id: newItemId,
+                             type: 'IMAGE',
+                             name: oldItem.name || monsterName,
+                             position: oldItem.position || { x: 0, y: 0 },
+                             rotation: oldItem.rotation || 0,
+                             scale: { x: 1, y: 1 },
+                             image: {
+                                 url: imgSrc,
+                                 mime: mime,
+                                 width: imgWidth,
+                                 height: imgHeight
+                             },
+                             grid: { dpi: imgDpi, offset: { x: 0, y: 0 } },
+                             layer: oldItem.layer || 'CHARACTER',
+                             locked: false,
+                             disableHit: false,
+                             visible: oldItem.visible !== false,
+                             metadata: oldItem.metadata || {}
+                         };
+
+                         console.log("Replacing item:", oldItem.id, "with clean item:", cleanItem.id);
+                         
+                         await OBR.scene.items.addItems([cleanItem]);
                          await OBR.scene.items.deleteItems([itemId]);
                          
                          showStats(data, newItemId);
