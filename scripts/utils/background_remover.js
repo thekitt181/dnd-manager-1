@@ -1,7 +1,7 @@
 
 import { createCanvas, loadImage } from 'canvas';
 
-export async function removeBackground(imageBuffer) {
+export async function removeBackground(imageBuffer, tolerance = 30) {
     const img = await loadImage(imageBuffer);
     const width = img.width;
     const height = img.height;
@@ -71,8 +71,9 @@ export async function removeBackground(imageBuffer) {
     if (targetMode) {
         // console.log(`Detected ${targetMode} background. AvgColor: ${avgR},${avgG},${avgB}. Removing...`);
         
-        // Increased tolerance for generated images
-        const tolerance = 90;
+        // Use provided tolerance (default 30)
+        // Manhattan distance threshold: tolerance * 3 (e.g., 30 * 3 = 90 total difference allowed)
+        const threshold = tolerance * 3;
         const queue = [];
         const visited = new Uint8Array(w * h);
         
@@ -90,7 +91,7 @@ export async function removeBackground(imageBuffer) {
 
             const dist = Math.abs(r - avgR) + Math.abs(g - avgG) + Math.abs(b - avgB);
             
-            if (dist < tolerance * 1.5) {
+            if (dist < threshold) {
                 queue.push(idx);
                 visited[idx] = 1;
             }

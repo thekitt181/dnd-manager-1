@@ -715,6 +715,40 @@ export async function addMonsterToScene(monster) {
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   let imageUrl = localStorage.getItem(`monster_image_${monster.name}`) || monster.image;
   
+  // Attempt to find a locally scraped/generated image if none is set
+  if (!imageUrl) {
+      const safeName = monster.name.replace(/[^a-zA-Z0-9]/g, '_');
+      
+      // Determine potential source folders to check
+      let possiblePaths = [];
+      
+      // 1. Check specific source folder if known
+      if (monster.source) {
+          const safeSource = monster.source.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+          possiblePaths.push(`images/monsters/${safeSource}/${safeName}.png`);
+      }
+      
+      // 2. Check "Other" folder (fallback for scraped images)
+      possiblePaths.push(`images/monsters/Other/${safeName}.png`);
+      
+      // 3. Check legacy flat folder (backward compatibility)
+      possiblePaths.push(`images/monsters/${safeName}.png`);
+
+      for (const path of possiblePaths) {
+           const exists = await new Promise(resolve => {
+               const img = new Image();
+               img.onload = () => resolve(true);
+               img.onerror = () => resolve(false);
+               img.src = path;
+           });
+           
+           if (exists) {
+               imageUrl = path;
+               break; // Found one!
+           }
+      }
+  }
+
   // Resolve relative paths (e.g. from extracted images)
   if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
       try {
@@ -3247,6 +3281,25 @@ export function searchItems(query) {
                             item.text.plainText = `${name}\nHP: ${newHp} AC: ${newAc}`;
                         }
                     });
+
+                    // Sync to Library (Permanent Change)
+                    // We need to ensure we have the latest description/stats from the library data we loaded
+                    const updatedMonster = { 
+                        ...data, 
+                        hp: newHp, 
+                        ac: newAc,
+                        source: data.source || "Custom" // Ensure source is preserved or set to Custom
+                    };
+                    
+                    // If the monster was originally built-in, this will create a custom override
+                    saveCustomMonster(updatedMonster);
+                    
+                    // Optional: Visual feedback could be added here
+                    const btn = document.getElementById('update-stats-btn');
+                    const originalText = btn.innerText;
+                    btn.innerText = "Saved!";
+                    setTimeout(() => btn.innerText = originalText, 1000);
+
                 } catch (error) {
                     console.error("Error updating stats:", error);
                     alert("Failed to update stats");

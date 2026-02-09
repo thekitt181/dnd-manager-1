@@ -31,15 +31,16 @@ async function generatePromptWithLLM(monster, cleanName) {
     ${descriptionContext}
     
     Task: Generate a single prompt string following this EXACT template:
-    "(isolated on flat pure white background:1.6), (no shadow:1.4), (full body shot:1.5), (perspective view:1.3), a high-quality digital 3D render of [INSERT VISUAL DESCRIPTION OF MONSTER], centered, magical fantasy style, dramatic lighting, sharp focus, intricate detail, 8k, Unreal Engine 5 render, masterpiece"
+    "(isolated on flat pure white background:1.6), (no shadow:1.5), (full body shot:1.5), (top down view:1.5), (overhead shot:1.5), a high-quality digital 3D render of [INSERT VISUAL DESCRIPTION OF MONSTER], centered, magical fantasy style, dramatic lighting, sharp focus, intricate detail, 8k, Unreal Engine 5 render, masterpiece"
     
     Rules:
     1. Replace [INSERT VISUAL DESCRIPTION...] with a detailed physical description of the creature.
-       - **USE YOUR KNOWLEDGE:** Combine the provided description with your own extensive knowledge of D&D lore and monster visuals. If the provided description is sparse, rely on the Monster Name to fill in the missing details from your training data.
-       - **Ignore game statistics** (STR, DEX, HP, AC, etc.) in the description data. Focus ONLY on lore and visual appearance.
+       - **CRITICAL: ACCURACY IS PARAMOUNT.** Use your extensive knowledge of D&D 5e Monster Manual lore. The monster MUST look like its canonical D&D representation.
+       - If the provided description is sparse, rely heavily on the Monster Name to retrieve its canonical appearance from your training data.
+       - **Ignore game statistics** (STR, DEX, HP, AC, etc.). Focus ONLY on lore and visual appearance.
        - Describe: body shape, skin/fur/scales texture, limbs, head/face, distinctive features (wings, horns, tails), and colors.
        - **CRITICAL:** Ensure the description implies a WHOLE creature (e.g., 'full body dragon', 'entire giant spider').
-       - **Style:** Medieval Fantasy / D&D.
+       - **Style:** Medieval Fantasy / D&D Tabletop Miniature style.
     2. Make it **EYE-CATCHING**: Include menacing poses, magical auras, or action elements if appropriate.
     3. Do NOT describe: text, ui, stats, health bars, grid lines, multiple views, or background scenery (other than white).
     4. Output ONLY the prompt string.`;
@@ -71,6 +72,8 @@ async function generatePromptWithLLM(monster, cleanName) {
             cleanResponse = cleanResponse.replace(/^(Here is|Here's|The) (the )?(generated )?prompt( string)?(:)?\s*/i, '');
             cleanResponse = cleanResponse.replace(/^"(.*)"$/, '$1');
         }
+        
+        console.log(`[LLM Prompt for ${cleanName}]: ${cleanResponse}`);
         return cleanResponse;
     } catch (e) {
         console.warn(`LLM Generation failed: ${e.message}`, e.cause ? e.cause : "");
@@ -82,7 +85,7 @@ async function generateLocalSD(prompt, negative_prompt, filepath) {
     return new Promise((resolve, reject) => {
         // Enforce strong negative prompts to prevent artifacts
         // Note: Removed 'person', 'man', 'woman', 'face', 'hands', 'body' as monsters can be humanoid.
-        const baseNegative = "text, watermark, signature, blur, blurry, low quality, bad anatomy, deformed, collage, frame, border, (icon:1.2), (ui:1.2), (symbol:1.2), grid, graph, chart, stats, numbers, interface, hud, health bar, multiple views, split screen, modern, sci-fi, futuristic, cyber, car, vehicle, photograph, photorealistic, camera, landscape, scenery, room, interior, exterior, house, building, architecture";
+        const baseNegative = "portrait, headshot, face shot, close up, cropped, out of frame, cut off, shadow, drop shadow, contact shadow, ground, floor, horizon, texture, text, watermark, signature, blur, blurry, low quality, bad anatomy, deformed, collage, frame, border, (icon:1.2), (ui:1.2), (symbol:1.2), grid, graph, chart, stats, numbers, interface, hud, health bar, multiple views, split screen, modern, sci-fi, futuristic, cyber, car, vehicle, photograph, photorealistic, camera, landscape, scenery, room, interior, exterior, house, building, architecture";
         
         const finalNegative = negative_prompt ? `${baseNegative}, ${negative_prompt}` : baseNegative;
 
@@ -117,12 +120,8 @@ async function generateLocalSD(prompt, negative_prompt, filepath) {
                     const json = JSON.parse(data);
                     if (json.images && json.images.length > 0) {
                         const buffer = Buffer.from(json.images[0], 'base64');
-                        // Save original image without background removal
-                        fs.writeFileSync(filepath, buffer);
-                        resolve();
-                        /*
-                        // Background removal disabled due to artifacts on complex backgrounds
-                        removeBackground(buffer).then(pngBuffer => {
+                        // Remove background before saving (Tolerance: 20 for strict removal of white only)
+                        removeBackground(buffer, 20).then(pngBuffer => {
                             fs.writeFileSync(filepath, pngBuffer);
                             resolve();
                         }).catch(err => {
@@ -130,7 +129,6 @@ async function generateLocalSD(prompt, negative_prompt, filepath) {
                              fs.writeFileSync(filepath, buffer);
                              resolve();
                         });
-                        */
                     } else {
                         reject(new Error("No images returned from Local SD"));
                     }
@@ -197,7 +195,10 @@ async function generateMonsterImages() {
             }
         }
 
-        let cleanName = toTitleCase(monster.name).trim();
+        // Filter for testing (remove before full run)
+        // if (monster.name !== "AHUIZOTL") continue;
+
+        const cleanName = monster.name.replace(/_/g, ' ').toLowerCase();
         const safeName = cleanName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
         const filename = `${safeName}.png`;
         const localPath = `images/monsters/${filename}`;
