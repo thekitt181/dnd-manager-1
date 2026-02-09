@@ -30,7 +30,7 @@ if (mongoUri) {
     const client = new MongoClient(mongoUri, {
         tls: true,
         serverSelectionTimeoutMS: 5000,
-        autoSelectFamily: false, // Fixes some Node 17+ IPV6 issues
+        family: 4, // Force IPv4 to avoid potential IPv6 issues on some platforms
     });
     client.connect()
         .then(() => {
@@ -38,7 +38,10 @@ if (mongoUri) {
             const db = client.db('owlbear-extension');
             dbCollection = db.collection('data');
         })
-        .catch(err => console.error('MongoDB connection error:', err));
+        .catch(err => {
+            console.error('MongoDB connection error:', err);
+            console.error('If you are using MongoDB Atlas, please check your Network Access (IP Whitelist) settings.');
+        });
 }
 
 // Fallback to local file if no DB (Ephemeral on Render!)
