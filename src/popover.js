@@ -750,6 +750,39 @@ export function searchMonsters(query, searchNameOnly = false, minCrStr = '', max
   }).slice(0, 50); // Limit to 50 results for performance
 }
 
+// Helper to ensure image URL is within OBR limits (2048 chars) by uploading Base64 to local server if needed
+async function ensureShortImageUrl(url) {
+    if (!url) return url;
+    // OBR limit is 2048. We give some buffer.
+    if (url.startsWith('data:image') && url.length > 2000) {
+        console.log("Image URL is too long (Base64), attempting to upload to local server...");
+        try {
+            const response = await fetch('/api/upload-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: url })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.url) {
+                    // Convert relative URL to absolute
+                    const absoluteUrl = new URL(data.url, window.location.href).href;
+                    console.log("Image uploaded successfully. New URL:", absoluteUrl);
+                    return absoluteUrl;
+                }
+            } else {
+                console.warn("Upload failed with status:", response.status);
+                alert(`Image upload failed (Status: ${response.status}). Ensure the backend server is running (npm start).`);
+            }
+        } catch (e) {
+            console.warn("Could not upload image to local server (is it running?):", e);
+            alert("Could not upload image to local server. Make sure 'npm start' is running in a separate terminal.");
+        }
+    }
+    return url;
+}
+
 export async function addMonsterToScene(monster) {
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   let imageUrl = localStorage.getItem(`monster_image_${monster.name}`) || monster.image;
@@ -851,6 +884,9 @@ export async function addMonsterToScene(monster) {
       imageUrl = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI+CiAgPGRlZnM+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9ImdyYWQxIiBjeD0iNTAlIiBjeT0iNTAlIiByPSI1MCUiIGZ4PSI1MCUiIGZ5PSI1MCUiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdHlsZT0ic3RvcC1jb2xvcjojZmY2YjZiO3N0b3Atb3BhY2l0eToxIiAvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiM4YjAwMDA7c3RvcC1vcGFjaXR5OjEiIC8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8Y2lyY2xlIGN4PSIyNTYiIGN5PSIyNTYiIHI9IjI1MCIgZmlsbD0idXJsKCNncmFkMSkiIC8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjUwIiBmaWxsPSJ3aGl0ZSIgZm9udC1mYW1pbHk9IkFyaWFsIj5NPC90ZXh0Pgo8L3N2Zz4=";
   }
   
+  // Ensure URL is short enough for OBR (upload if necessary)
+  imageUrl = await ensureShortImageUrl(imageUrl);
+
   console.log(`[v${EXTENSION_VERSION}] Resolved imageUrl for ${monster.name}:`, imageUrl);
 
   console.log(`[v${EXTENSION_VERSION}] Preparing to add monster:`, monster.name);
@@ -992,13 +1028,8 @@ export async function addMonsterToScene(monster) {
                    // Explicitly set grid property (Required by OBR for Image items)
                    item.grid = { dpi: finalDpi, offset: { x: 0, y: 0 } };
 
-                   // CLEANUP: OBR strict validation rejects items with system fields like createdUserId/lastModified
-                   // even if they match the schema types. We must remove them before adding.
-                   delete item.createdUserId;
-                   delete item.lastModified;
-                   delete item.zIndex;
 
-                   console.log("Adding item to scene (cleaned):", item);
+                   console.log("Adding item to scene:", item);
 
                    OBR.scene.items.addItems([item])
                      .then(() => {
@@ -1153,6 +1184,9 @@ export async function addMonsterToScene(monster) {
               console.warn("Failed to resolve relative image URL:", imageUrl, e);
           }
       }
+
+      // Ensure URL is short enough for OBR
+      imageUrl = await ensureShortImageUrl(imageUrl);
 
       // Detect MIME
       let mimeType = 'image/svg+xml';
@@ -1370,7 +1404,12 @@ function processAndRemoveBackground(source) {
                     if (targetMode) {
                         console.log(`Detected ${targetMode} background. AvgColor: ${avgR},${avgG},${avgB}. Starting removal...`);
                         
-                        const tolerance = 60; // Increased tolerance for JPEG artifacts
+                        // Use stricter tolerance for white mode to prevent erasing white monsters (e.g., Unicorns)
+                        let tolerance = 60; 
+                        if (targetMode === 'white') {
+                            tolerance = 50; // Moderate tolerance (was 30, which was too strict for artifacts)
+                        }
+
                         const queue = [];
                         const visited = new Uint8Array(w * h);
                         
@@ -1389,7 +1428,7 @@ function processAndRemoveBackground(source) {
 
                             const dist = Math.abs(r - avgR) + Math.abs(g - avgG) + Math.abs(b - avgB);
                             
-                            // Stricter check for the initial seed (border) to avoid eating into the object immediately
+                            // Seed Check: Allow slightly noisier borders to start the flood fill
                             if (dist < tolerance * 1.5) {
                                 queue.push(idx);
                                 visited[idx] = 1;
@@ -1424,8 +1463,12 @@ function processAndRemoveBackground(source) {
                                         
                                         const dist = Math.abs(nr - avgR) + Math.abs(ng - avgG) + Math.abs(nb - avgB);
                                         
-                                        // Standard tolerance for flood fill
-                                        if (dist < tolerance * 3) {
+                                        // Use balanced multiplier for white
+                                        // 2.0 gives MaxDist = 50 * 2.0 = 100 (Covers light grays/artifacts)
+                                        // 3.0 gives MaxDist = 60 * 3.0 = 180 (Covers almost everything light)
+                                        const fillMultiplier = targetMode === 'white' ? 2.0 : 3.0;
+                                        
+                                        if (dist < tolerance * fillMultiplier) {
                                             visited[nIdx] = 1;
                                             queue.push(nIdx);
                                         }
@@ -2567,7 +2610,10 @@ export function searchItems(query) {
             <div style="text-align: center; margin: 5px 0; font-size: 0.8em;">- OR -</div>
             <input type="text" id="new-image-url" placeholder="Paste Image URL" style="width: 100%; box-sizing: border-box; margin-bottom: 5px;">
             <button id="save-new-image" style="width: 100%; margin-bottom: 5px;">Save & Apply</button>
-            <button id="clear-image-cache" style="width: 100%; background: #d33; color: white; border: none; padding: 5px; border-radius: 3px; cursor: pointer;">Clear Saved Images</button>
+            <div style="display: flex; gap: 5px;">
+                <button id="reset-this-image" style="flex: 1; background: #f57c00; color: white; border: none; padding: 5px; border-radius: 3px; cursor: pointer;" title="Remove custom image for this entry only">Reset This Image</button>
+                <button id="clear-image-cache" style="flex: 1; background: #d33; color: white; border: none; padding: 5px; border-radius: 3px; cursor: pointer;" title="Delete ALL custom monster images">Clear All Images</button>
+            </div>
         </div>
       </div>
     `;
@@ -3207,9 +3253,26 @@ export function searchItems(query) {
     const urlInput = document.getElementById('new-image-url');
     const libraryBtn = document.getElementById('library-btn');
     const clearCacheBtn = document.getElementById('clear-image-cache');
+    const resetImgBtn = document.getElementById('reset-this-image');
 
     toggleBtn.addEventListener('click', () => {
         panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    });
+
+    // Reset single image handler
+    resetImgBtn.addEventListener('click', () => {
+        const entryName = data.name.split('\n')[0];
+        const key = isItem ? `item_image_${entryName}` : `monster_image_${entryName}`;
+        
+        if (localStorage.getItem(key)) {
+            if (confirm(`Reset custom image for "${entryName}"? This will revert to the default image.`)) {
+                localStorage.removeItem(key);
+                alert(`Custom image for "${entryName}" removed.`);
+                // Ideally reload the view, but for now just alert.
+            }
+        } else {
+            alert(`No custom image saved for "${entryName}".`);
+        }
     });
 
     clearCacheBtn.addEventListener('click', () => {
@@ -3390,51 +3453,13 @@ export function searchItems(query) {
                             scale: { x: 1, y: 1 }
                         };
                          
-                         // Fix: OBR requires 'type' to be valid, but 'oldItem.type' might be stale or incorrect?
-                         // The error says "items[0].type must be [CURVE]... value: IMAGE".
-                         // Wait, if oldItem.type was 'CURVE' (like a drawing) we can't just change it to 'IMAGE' type via update?
-                         // Actually, addItems takes a full item definition.
-                         // The error message says: "items[0].type" must be [CURVE]... value: "IMAGE".
-                         // This implies we are trying to add an item with type 'IMAGE' but the validation expects 'CURVE'??
-                         // NO, the error is an "alternatives.match" error. It lists all possible types.
-                         // It says "items[0].type" must be [CURVE], [LABEL], [LINE], [POINTER], [RULER], [SHAPE], [TEXT], [PATH].
-                         // Notice "IMAGE" is MISSING from the valid list in the error message!
-                         // This is extremely strange because OBR definitely supports 'IMAGE'.
-                         // Ah, 'IMAGE' type is deprecated in OBR 2.0? Or maybe it's strict on casing?
-                         // Documentation says 'IMAGE' is valid.
-                         // Wait, is it possible the user is using a tool that only allows creating certain types?
-                         // No, we are using OBR.scene.items.addItems.
+                         if (!newItem.type) newItem.type = 'IMAGE';
+                         if (!newItem.scale) newItem.scale = { x: 1, y: 1 };
+                         if (!newItem.position) newItem.position = { x: 0, y: 0 };
                          
-                         // Use buildImage to ensure valid item structure (avoids 'createdUserId' validation errors)
-                         const cleanItem = buildImage({
-                             url: imgSrc,
-                             mime: mime,
-                             width: imgWidth,
-                             height: imgHeight
-                         })
-                         .id(newItemId)
-                         .name(oldItem.name || monsterName)
-                         .position(oldItem.position || { x: 0, y: 0 })
-                         .rotation(oldItem.rotation || 0)
-                         .scale({ x: 1, y: 1 })
-                         .layer(oldItem.layer || 'CHARACTER')
-                         .locked(oldItem.locked || false)
-                         .visible(oldItem.visible !== false)
-                         .metadata(oldItem.metadata || {})
-                         .build();
-
-                         // Explicitly set grid and other properties not covered by builder
-                         cleanItem.grid = { dpi: imgDpi, offset: { x: 0, y: 0 } };
-                         cleanItem.disableHit = false;
-
-                         // CLEANUP: Strip system fields that might cause validation errors
-                         delete cleanItem.createdUserId;
-                         delete cleanItem.lastModified;
-                         delete cleanItem.zIndex;
-
-                         console.log("Replacing item:", oldItem.id, "with built item:", cleanItem.id);
+                         console.log("Replacing item:", oldItem.id, "with", newItem.id);
                          
-                         await OBR.scene.items.addItems([cleanItem]);
+                         await OBR.scene.items.addItems([newItem]);
                          await OBR.scene.items.deleteItems([itemId]);
                          
                          showStats(data, newItemId);
@@ -3459,45 +3484,22 @@ export function searchItems(query) {
             try {
                 let finalImage = await processAndRemoveBackground(newImage);
 
-                // LOCAL FIRST: Use Data URI directly to avoid server upload issues during debugging
-                /* 
-                // Upload if it's a data URI to avoid OBR 2048 char limit
-                if (finalImage.startsWith('data:')) {
-                     try {
-                         saveImgBtn.innerText = "Uploading...";
-                         console.log("Uploading processed image to server...");
-                         
-                         // Determine API endpoint (handle local vs production)
-                         const apiBase = window.location.origin;
-                         const response = await fetch(`${apiBase}/api/upload-image`, {
-                             method: 'POST',
-                             headers: { 'Content-Type': 'application/json' },
-                             body: JSON.stringify({ 
-                                 image: finalImage,
-                                 filename: monsterName 
-                             })
-                         });
-                         
-                         if (!response.ok) {
-                             const errText = await response.text();
-                             throw new Error(`Upload failed: ${response.status} ${errText}`);
-                         }
-                         
-                         const result = await response.json();
-                         if (result.url) {
-                             // Convert to absolute URL
-                             finalImage = new URL(result.url, apiBase).toString();
-                             console.log("Image uploaded successfully:", finalImage);
-                         }
-                     } catch (uploadErr) {
-                         console.error("Image upload failed, falling back to Data URI (may fail OBR validation):", uploadErr);
-                     }
+                // Ensure the image URL is short enough for OBR (uploads to local server if needed)
+                try {
+                    saveImgBtn.innerText = "Verifying...";
+                    finalImage = await ensureShortImageUrl(finalImage);
+                } catch (uploadErr) {
+                    console.error("Image optimization failed:", uploadErr);
+                    // Fallthrough to try saving anyway, though it might fail OBR validation
                 }
-                */
                 
                 await saveAndApply(finalImage);
             } catch (e) {
                 console.error("Processing failed, using original", e);
+                // Try with original image, but still ensure it's short enough
+                try {
+                     newImage = await ensureShortImageUrl(newImage);
+                } catch (ignore) {}
                 await saveAndApply(newImage);
             } finally {
                 saveImgBtn.disabled = false;
@@ -3601,7 +3603,16 @@ export function searchItems(query) {
   const handleMonsterClick = async (monster) => {
       // Reuse existing monster click logic
       try {
-            const selection = await OBR.player.getSelection();
+            let selection = await OBR.player.getSelection();
+            
+            // If no manual selection, check if we were opened via context menu for a specific item
+            if ((!selection || selection.length === 0)) {
+                const searchParams = new URLSearchParams(window.location.search);
+                const ctxItemId = searchParams.get('itemId');
+                if (ctxItemId) {
+                    selection = [ctxItemId];
+                }
+            }
 
             // Check if user has selected exactly one item that is an IMAGE
             if (selection && selection.length === 1) {
@@ -3638,7 +3649,8 @@ export function searchItems(query) {
                         }
 
                         // 3. Save this image association for future adds of this monster
-                        localStorage.setItem(`monster_image_${monster.name}`, selectedItem.image.url);
+                        const safeUrl = await ensureShortImageUrl(selectedItem.image.url);
+                        localStorage.setItem(`monster_image_${monster.name}`, safeUrl);
 
                         // 4. Update the item
                         await OBR.scene.items.updateItems([selectedItem.id], (items) => {
@@ -3654,6 +3666,11 @@ export function searchItems(query) {
                                     maxHp: hpVal,
                                     created_by: 'dnd_extension' 
                                 };
+                                
+                                // Update image URL if we optimized it
+                                if (safeUrl !== selectedItem.image.url) {
+                                    item.image.url = safeUrl;
+                                }
                                 
                                 // Update text label safely
                                 if (!item.text) {
@@ -3772,8 +3789,11 @@ export function searchItems(query) {
                             }, item.id);
                          } else {
                              // Feedback if not a valid monster
-                             console.warn("Item is not a recognized extension object:", item);
-                             // alert("Selected item does not have stats."); // Suppress alert to avoid annoyance
+                             if (item.type === 'IMAGE') {
+                                 console.log("Selected item is a raw image (not a monster token). Search for a monster to assign stats.");
+                             } else {
+                                 console.log("Selected item is not a recognized extension object:", item);
+                             }
                          }
                       }
                   });
