@@ -724,7 +724,8 @@ export async function addMonsterToScene(monster) {
       
       // 1. Check specific source folder if known
       if (monster.source) {
-          const safeSource = monster.source.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+          // Normalize source to lowercase to match scraper behavior
+          const safeSource = monster.source.toLowerCase().replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
           possiblePaths.push(`images/monsters/${safeSource}/${safeName}.png`);
       }
       
@@ -733,6 +734,19 @@ export async function addMonsterToScene(monster) {
       
       // 3. Check legacy flat folder (backward compatibility)
       possiblePaths.push(`images/monsters/${safeName}.png`);
+      
+      // 4. Check common D&D sources (fallback for mismatched sources)
+      // This helps when monsters.json says "Flee Mortals" but we scraped it into "Monster_Manual"
+      const commonSources = [
+          "Monster_Manual", 
+          "Volos_Guide_to_Monsters", 
+          "Mordenkainens_Tome_of_Foes", 
+          "Fizbans_Treasury_of_Dragons",
+          "Mordenkainen_Presents_Monsters_of_the_Multiverse"
+      ];
+      for (const src of commonSources) {
+          possiblePaths.push(`images/monsters/${src}/${safeName}.png`);
+      }
 
       for (const path of possiblePaths) {
            const exists = await new Promise(resolve => {
@@ -761,6 +775,8 @@ export async function addMonsterToScene(monster) {
   if (!imageUrl || imageUrl.includes('apple-touch-icon') || imageUrl.includes('unsplash')) {
       imageUrl = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI+CiAgPGRlZnM+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9ImdyYWQxIiBjeD0iNTAlIiBjeT0iNTAlIiByPSI1MCUiIGZ4PSI1MCUiIGZ5PSI1MCUiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdHlsZT0ic3RvcC1jb2xvcjojZmY2YjZiO3N0b3Atb3BhY2l0eToxIiAvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiM4YjAwMDA7c3RvcC1vcGFjaXR5OjEiIC8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8Y2lyY2xlIGN4PSIyNTYiIGN5PSIyNTYiIHI9IjI1MCIgZmlsbD0idXJsKCNncmFkMSkiIC8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjUwIiBmaWxsPSJ3aGl0ZSIgZm9udC1mYW1pbHk9IkFyaWFsIj5NPC90ZXh0Pgo8L3N2Zz4=";
   }
+  
+  console.log(`[v${EXTENSION_VERSION}] Resolved imageUrl for ${monster.name}:`, imageUrl);
 
   console.log(`[v${EXTENSION_VERSION}] Preparing to add monster:`, monster.name);
 
@@ -1945,7 +1961,7 @@ export function searchItems(query) {
       searchView.style.display = 'flex';
   });
 
-  editorSaveBtn.addEventListener('click', () => {
+  editorSaveBtn.addEventListener('click', async () => {
       const name = editorName.value.trim();
       if (!name) {
           alert("Name is required");
@@ -1970,6 +1986,42 @@ export function searchItems(query) {
               source: editorOriginalSource || "Custom"
           };
           saveCustomMonster(newMonster);
+
+          // Sync Library -> Tokens: Update existing OBR tokens for this monster
+          try {
+              const items = await OBR.scene.items.getItems();
+              const toUpdate = items.filter(item => {
+                  if (item.type !== 'IMAGE') return false;
+                  // Match by Name (heuristic: text label starts with name)
+                  const text = item.text?.plainText || "";
+                  // Also check metadata if available
+                  const metaName = item.metadata?.name;
+                  if (metaName && metaName === name) return true;
+                  
+                  return text.startsWith(name);
+              });
+
+              if (toUpdate.length > 0) {
+                  if (confirm(`Update ${toUpdate.length} existing tokens on the map with these new stats?`)) {
+                      await OBR.scene.items.updateItems(toUpdate.map(i => i.id), (items) => {
+                          for (let item of items) {
+                              // Update Metadata
+                              if (!item.metadata) item.metadata = {};
+                              item.metadata.hp = newMonster.hp;
+                              item.metadata.ac = newMonster.ac;
+                              item.metadata.name = newMonster.name; // Ensure name is in metadata for future sync
+                              
+                              // Update Text Label
+                              // Usually "Name\nHP: X AC: Y"
+                              item.text.plainText = `${newMonster.name}\nHP: ${newMonster.hp} AC: ${newMonster.ac}`;
+                          }
+                      });
+                  }
+              }
+          } catch (e) {
+              console.error("Failed to sync tokens:", e);
+          }
+
       } else {
           const newItem = {
               name: name,
