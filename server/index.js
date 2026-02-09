@@ -28,7 +28,6 @@ let dbCollection = null;
 
 if (mongoUri) {
     const client = new MongoClient(mongoUri, {
-        tls: true,
         serverSelectionTimeoutMS: 5000,
         family: 4, // Force IPv4 to avoid potential IPv6 issues on some platforms
     });
