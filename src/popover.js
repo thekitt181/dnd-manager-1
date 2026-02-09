@@ -3459,6 +3459,8 @@ export function searchItems(query) {
             try {
                 let finalImage = await processAndRemoveBackground(newImage);
 
+                // LOCAL FIRST: Use Data URI directly to avoid server upload issues during debugging
+                /* 
                 // Upload if it's a data URI to avoid OBR 2048 char limit
                 if (finalImage.startsWith('data:')) {
                      try {
@@ -3491,6 +3493,7 @@ export function searchItems(query) {
                          console.error("Image upload failed, falling back to Data URI (may fail OBR validation):", uploadErr);
                      }
                 }
+                */
                 
                 await saveAndApply(finalImage);
             } catch (e) {
