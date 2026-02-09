@@ -3400,31 +3400,29 @@ export function searchItems(query) {
                          // Wait, is it possible the user is using a tool that only allows creating certain types?
                          // No, we are using OBR.scene.items.addItems.
                          
-                         // Let's try explicitly setting type to 'IMAGE' and ensuring all required fields are clean.
-                         // Maybe copying ...oldItem carries over some garbage that confuses the validator?
-                         
-                         const cleanItem = {
-                             id: newItemId,
-                             type: 'IMAGE',
-                             name: oldItem.name || monsterName,
-                             position: oldItem.position || { x: 0, y: 0 },
-                             rotation: oldItem.rotation || 0,
-                             scale: { x: 1, y: 1 },
-                             image: {
-                                 url: imgSrc,
-                                 mime: mime,
-                                 width: imgWidth,
-                                 height: imgHeight
-                             },
-                             grid: { dpi: imgDpi, offset: { x: 0, y: 0 } },
-                             layer: oldItem.layer || 'CHARACTER',
-                             locked: false,
-                             disableHit: false,
-                             visible: oldItem.visible !== false,
-                             metadata: oldItem.metadata || {}
-                         };
+                         // Use buildImage to ensure valid item structure (avoids 'createdUserId' validation errors)
+                         const cleanItem = buildImage({
+                             url: imgSrc,
+                             mime: mime,
+                             width: imgWidth,
+                             height: imgHeight
+                         })
+                         .id(newItemId)
+                         .name(oldItem.name || monsterName)
+                         .position(oldItem.position || { x: 0, y: 0 })
+                         .rotation(oldItem.rotation || 0)
+                         .scale({ x: 1, y: 1 })
+                         .layer(oldItem.layer || 'CHARACTER')
+                         .locked(oldItem.locked || false)
+                         .visible(oldItem.visible !== false)
+                         .metadata(oldItem.metadata || {})
+                         .build();
 
-                         console.log("Replacing item:", oldItem.id, "with clean item:", cleanItem.id);
+                         // Explicitly set grid and other properties not covered by builder
+                         cleanItem.grid = { dpi: imgDpi, offset: { x: 0, y: 0 } };
+                         cleanItem.disableHit = false;
+
+                         console.log("Replacing item:", oldItem.id, "with built item:", cleanItem.id);
                          
                          await OBR.scene.items.addItems([cleanItem]);
                          await OBR.scene.items.deleteItems([itemId]);
