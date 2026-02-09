@@ -715,6 +715,42 @@ export async function addMonsterToScene(monster) {
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   let imageUrl = localStorage.getItem(`monster_image_${monster.name}`) || monster.image;
   
+  // Helper to check if image exists
+  const checkImage = (url) => new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+  });
+
+  // Validate the initial image URL. If it fails, clear it to trigger fallback search.
+  if (imageUrl) {
+      // Resolve relative path first
+      if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
+          try {
+              imageUrl = new URL(imageUrl, window.location.href).href;
+          } catch (e) {}
+      }
+      
+      const exists = await checkImage(imageUrl);
+      if (!exists) {
+          console.warn(`Image URL failed to load: ${imageUrl}. Trying alternatives...`);
+          
+          // Try case-insensitive fix for Monster_Manual
+          if (imageUrl.includes('Monster_Manual')) {
+              const altUrl = imageUrl.replace('Monster_Manual', 'monster_manual');
+              if (await checkImage(altUrl)) {
+                  console.log(`Found image at alternative path: ${altUrl}`);
+                  imageUrl = altUrl;
+              } else {
+                  imageUrl = null; // Trigger full fallback
+              }
+          } else {
+              imageUrl = null; // Trigger full fallback
+          }
+      }
+  }
+
   // Attempt to find a locally scraped/generated image if none is set
   if (!imageUrl) {
       const safeName = monster.name.replace(/[^a-zA-Z0-9]/g, '_');
@@ -863,8 +899,18 @@ export async function addMonsterToScene(monster) {
       await new Promise((resolve, reject) => {
            OBR.onReady(() => {
                try {
-                   const hpValue = parseInt(String(monster.hp), 10) || 10;
-                   const acValue = parseInt(String(monster.ac), 10) || 10;
+                   // Robust stat parsing
+                   const parseStat = (val) => {
+                       if (typeof val === 'number') return val;
+                       if (typeof val === 'string') {
+                           const match = val.match(/^(\d+)/);
+                           return match ? parseInt(match[1]) : 10;
+                       }
+                       return 10;
+                   };
+                   
+                   const hpValue = parseStat(monster.hp);
+                   const acValue = parseStat(monster.ac);
                    
                    const item = buildImage(
                      {
@@ -3395,6 +3441,16 @@ export function searchItems(query) {
 
     resultsDiv.innerHTML = html;
 
+  // Helper: Parse stat to integer safely
+  const parseStat = (val) => {
+      if (typeof val === 'number') return val;
+      if (typeof val === 'string') {
+          const match = val.match(/^(\d+)/);
+          return match ? parseInt(match[1]) : 10;
+      }
+      return 10;
+  };
+
   const handleMonsterClick = async (monster) => {
       // Reuse existing monster click logic
       try {
@@ -3423,9 +3479,7 @@ export function searchItems(query) {
                         let imgWidth = selectedItem.image.width;
                         let imgHeight = selectedItem.image.height;
 
-                        // Try to get natural dimensions if possible (though we might only have current logical width/height)
-                        // If the item is already on stage, selectedItem.image.width is likely its logical width (e.g. 300)
-                        // We need the source URL to get true dimensions to fix the DPI
+                        // Try to get natural dimensions if possible
                         const dims = await getImageDimensions(selectedItem.image.url);
                         if (dims && dims.width && dims.height) {
                             imgWidth = dims.width;
@@ -3433,37 +3487,35 @@ export function searchItems(query) {
                             const maxDim = Math.max(imgWidth, imgHeight);
                             imgDpi = maxDim / squares;
                         } else {
-                            // If we can't get true dims, assume current logical size was 150/square? 
-                            // Or just set DPI to 150 * squares? 
-                            // Safer to default to standard 150 if lookup fails
                              imgDpi = 150;
                         }
 
                         // 3. Save this image association for future adds of this monster
-                        // This fulfills "save image it was assigned to"
                         localStorage.setItem(`monster_image_${monster.name}`, selectedItem.image.url);
 
                         // 4. Update the item
                         await OBR.scene.items.updateItems([selectedItem.id], (items) => {
                             for (let item of items) {
                                 // Update metadata
+                                const hpVal = parseStat(monster.hp);
+                                const acVal = parseStat(monster.ac);
                                 item.metadata = { 
                                     ...item.metadata, 
                                     ...monster, 
-                                    hp: parseInt(monster.hp) || 10,
-                                    ac: parseInt(monster.ac) || 10,
-                                    maxHp: parseInt(monster.hp) || 10,
+                                    hp: hpVal,
+                                    ac: acVal,
+                                    maxHp: hpVal,
                                     created_by: 'dnd_extension' 
                                 };
                                 
-                                // Update text label safely (avoid full replacement to prevent validation errors)
+                                // Update text label safely
                                 if (!item.text) {
                                     item.text = {
-                                        richText: [], // Required by schema
+                                        richText: [], 
                                         style: {}
                                     };
                                 }
-                                item.text.plainText = `${monster.name}\nHP: ${monster.hp} AC: ${monster.ac}`;
+                                item.text.plainText = `${monster.name}\nHP: ${hpVal} AC: ${acVal}`;
                                 // Note: item.text.visible is not a valid property on IMAGE items
                                 
                                 if (!item.text.style) item.text.style = {};

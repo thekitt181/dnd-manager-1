@@ -177,6 +177,11 @@ app.get('/api/proxy', (req, res) => {
     }
 });
 
+// Return 404 for missing images instead of index.html to prevent valid 200 OK HTML responses for images
+app.get('/images/*', (req, res) => {
+    res.status(404).send('Image not found');
+});
+
 // Serve index.html for any other route (SPA support)
 app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
