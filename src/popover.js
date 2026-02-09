@@ -5,6 +5,8 @@ import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rod
 const EXTENSION_VERSION = "1.2"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
 
+let spawnPosition = null; // Global spawn position from URL params
+
 const ICON_SVG = "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/master/svgs/solid/dice-d20.svg";
 
 // Common Spell Data (Damage, Save, AoE)
@@ -934,7 +936,7 @@ export async function addMonsterToScene(monster) {
   if (window.self !== window.top) {
       // Production mode
       await new Promise((resolve, reject) => {
-           OBR.onReady(() => {
+           OBR.onReady(async () => {
                try {
                    // Robust stat parsing
                    const parseStat = (val) => {
@@ -948,6 +950,20 @@ export async function addMonsterToScene(monster) {
                    
                    const hpValue = parseStat(monster.hp);
                    const acValue = parseStat(monster.ac);
+
+                   // Determine Position
+                   let pos = { x: 0, y: 0 };
+                   console.log("addMonsterToScene using spawnPosition:", spawnPosition);
+                   if (spawnPosition) {
+                       pos = { ...spawnPosition };
+                   } else {
+                        try {
+                            const center = await OBR.viewport.getPosition();
+                            pos = { x: center.x, y: center.y };
+                        } catch (vpErr) {
+                            console.warn("Could not get viewport position:", vpErr);
+                        }
+                    }
                    
                    const item = buildImage(
                      {
@@ -957,7 +973,7 @@ export async function addMonsterToScene(monster) {
                          height: finalHeight,
                      }
                    )
-                     .position({ x: 0, y: 0 })
+                     .position(pos)
                      .scale({ x: 1, y: 1 })
                      .plainText(`${monster.name}\nHP: ${hpValue} AC: ${acValue}`)
                      .metadata({
@@ -1820,7 +1836,18 @@ export function searchItems(query) {
   }
 
   // Setup UI
-  export function setup() {
+  export async function setup() {
+  console.log("Setup called with URL:", window.location.href);
+  const searchParams = new URLSearchParams(window.location.search);
+  const sx = searchParams.get('spawnX');
+  const sy = searchParams.get('spawnY');
+  if (sx && sy) {
+      spawnPosition = { x: parseFloat(sx), y: parseFloat(sy) };
+      console.log("Spawn position set from URL:", spawnPosition);
+  } else {
+      console.log("No spawn position in URL");
+  }
+
   const app = document.getElementById('app');
   app.innerHTML = `
     <div id="drag-handle" style="
@@ -2323,13 +2350,16 @@ export function searchItems(query) {
 
   // Construct canonical URL once to prevent reload loops
   // We must strip OBR-injected parameters (like obrref) and only keep our own
-  const searchParams = new URLSearchParams(window.location.search);
+  // searchParams is already defined at top of setup function
   const mode = searchParams.get('mode');
   const targetItemId = searchParams.get('itemId');
   
   let popoverUrl = '/index.html?mode=' + (mode || 'popover');
   if (targetItemId) {
       popoverUrl += '&itemId=' + targetItemId;
+  }
+  if (spawnPosition) {
+      popoverUrl += `&spawnX=${spawnPosition.x}&spawnY=${spawnPosition.y}`;
   }
 
   dragHandle.addEventListener('pointerdown', (e) => {
@@ -2514,8 +2544,10 @@ export function searchItems(query) {
                  </div>
                  <button id="update-stats-btn" data-id="${itemId}" style="margin-top: 5px;">Update Stats</button>
                  <button id="share-description-btn" style="width: 100%; margin-top: 5px; background-color: #FF9800; color: white; border: none; padding: 5px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
+                 <button id="add-to-scene-btn" style="width: 100%; margin-top: 5px; background-color: #4CAF50; color: white; border: none; padding: 5px; border-radius: 4px; cursor: pointer;">Add Another to Scene</button>
                </div>`
             : `<button id="edit-btn" style="width: 100%; margin-bottom: 5px; background-color: #2196F3; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Edit / Rename</button>
+               <button id="add-to-scene-btn" style="width: 100%; margin-bottom: 5px; background-color: #4CAF50; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Add to Scene</button>
                <button id="share-description-btn" style="width: 100%; margin-bottom: 5px; background-color: #FF9800; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
                <div style="margin-top: 5px;"><strong>HP:</strong> ${data.hp} | <strong>AC:</strong> ${data.ac}</div>`;
     }
@@ -2777,6 +2809,27 @@ export function searchItems(query) {
                 const errDetail = e.message || (e.error && e.error.message) || JSON.stringify(e);
                 alert("Failed to share note: " + errDetail);
             }
+        });
+    }
+
+    // Add to Scene Listener (for Monsters)
+    const addToSceneBtn = document.getElementById('add-to-scene-btn');
+    if (addToSceneBtn) {
+        addToSceneBtn.addEventListener('click', async () => {
+             addToSceneBtn.disabled = true;
+             addToSceneBtn.innerText = "Adding...";
+             try {
+                 await addMonsterToScene(data);
+                 addToSceneBtn.innerText = "Added!";
+             } catch (e) {
+                 console.error(e);
+                 alert("Error adding to scene: " + e.message);
+                 addToSceneBtn.innerText = "Error";
+             }
+             setTimeout(() => {
+                 addToSceneBtn.disabled = false;
+                 addToSceneBtn.innerText = itemId ? "Add Another to Scene" : "Add to Scene";
+             }, 2000);
         });
     }
 
@@ -3893,13 +3946,33 @@ if (window.self === window.top) {
                     {
                         icon: ICON_SVG,
                         label: 'View Stats & Actions',
+                        filter: {
+                            min: 1,
+                        },
                     },
                 ],
                 onClick: async (context, elementId) => {
                     const itemId = context.items.length > 0 ? context.items[0].id : null;
+                    
+                    let extraParams = "";
+                    if (itemId) {
+                         try {
+                             // Fetch full item data to get accurate position
+                             const items = await OBR.scene.items.getItems([itemId]);
+                             if (items.length > 0 && items[0].position) {
+                                 const p = items[0].position;
+                                 extraParams = `&spawnX=${p.x}&spawnY=${p.y}`;
+                             }
+                         } catch (e) {
+                             console.warn("Could not fetch item position for spawn context:", e);
+                         }
+                    }
+
+                    // Add timestamp to force reload/update of the iframe
+                    const timestamp = Date.now();
                     const url = itemId 
-                        ? `/index.html?mode=popover&itemId=${itemId}` 
-                        : '/index.html?mode=popover';
+                        ? `/index.html?mode=popover&itemId=${itemId}${extraParams}&t=${timestamp}` 
+                        : `/index.html?mode=popover${extraParams}&t=${timestamp}`;
                     
                     const storedPos = localStorage.getItem('dnd_extension_popover_pos');
                     const anchorPos = storedPos ? JSON.parse(storedPos) : { left: 200, top: 100 };
@@ -3925,6 +3998,41 @@ if (window.self === window.top) {
             console.log("Context menu created successfully");
         } catch (e) {
             console.error("Error creating context menu:", e);
+        }
+
+        // Create Tool and Mode for Spawning
+        try {
+            await OBR.tool.create({
+                id: 'com.dnd-extension.spawn-tool',
+                icons: [{ icon: ICON_SVG, label: 'Spawn Monster' }],
+            });
+
+            await OBR.tool.createMode({
+                id: 'com.dnd-extension.spawn-mode',
+                icons: [{ icon: ICON_SVG, label: 'Spawn Monster' }],
+                onToolClick: async (context, event) => {
+                    const p = event.pointerPosition;
+                    if (p) {
+                         const timestamp = Date.now();
+                         const url = `/index.html?mode=popover&spawnX=${p.x}&spawnY=${p.y}&t=${timestamp}`;
+                         
+                         const storedPos = localStorage.getItem('dnd_extension_popover_pos');
+                         const anchorPos = storedPos ? JSON.parse(storedPos) : { left: 200, top: 100 };
+
+                         await OBR.popover.open({
+                             id: 'dnd-monster-search-popover',
+                             url: url,
+                             height: 600,
+                             width: 400,
+                             anchorReference: "POSITION",
+                             anchorPosition: anchorPos
+                         });
+                    }
+                }
+            });
+            console.log("Spawn Tool created successfully");
+        } catch (e) {
+            console.error("Error creating spawn tool:", e);
         }
 
         // Listen for rolls from other players
