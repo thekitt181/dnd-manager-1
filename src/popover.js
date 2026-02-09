@@ -475,6 +475,25 @@ function parseMonsterActions(description) {
   return [...parsedActions, ...newSpellActions];
 }
 
+// Helper: Parse stats object from JSON
+function parseStatsObject(stats) {
+  if (!stats) return [];
+  const map = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
+  const order = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
+  const result = [];
+  
+  for (const [key, val] of Object.entries(stats)) {
+      const name = map[key.toLowerCase()];
+      if (name) {
+           const score = parseInt(val, 10);
+           const mod = Math.floor((score - 10) / 2);
+           result.push({ name, score, mod });
+      }
+  }
+  
+  return result.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+}
+
 // Helper: Parse Ability Scores
 function parseAbilities(text) {
   if (!text) return [];
@@ -505,6 +524,24 @@ function parseAbilities(text) {
           });
       }
   }
+
+  // Fallback for "Block Format": STR DEX CON ... \n 10 (+0) 12 (+1) ...
+  if (abilities.length === 0) {
+      // Look for 6 consecutive stat blocks (e.g. "13 (+1) 6 (-2) ...")
+      const blockRegex = /(\d+)\s*\(([+-]\d+)\)\s*(\d+)\s*\(([+-]\d+)\)\s*(\d+)\s*\(([+-]\d+)\)\s*(\d+)\s*\(([+-]\d+)\)\s*(\d+)\s*\(([+-]\d+)\)\s*(\d+)\s*\(([+-]\d+)\)/;
+      const blockMatch = normalized.match(blockRegex);
+      if (blockMatch) {
+          const names = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'];
+          for (let i = 0; i < 6; i++) {
+              abilities.push({
+                  name: names[i],
+                  score: parseInt(blockMatch[i*2 + 1], 10),
+                  mod: parseInt(blockMatch[i*2 + 2], 10)
+              });
+          }
+      }
+  }
+
   return abilities;
 }
 
@@ -2437,7 +2474,10 @@ export function searchItems(query) {
              libraryData = monsters.find(m => m.name === data.name);
         }
 
-        if (libraryData) descriptionToUse = libraryData.description;
+        if (libraryData) {
+            descriptionToUse = libraryData.description;
+            data = { ...data, ...libraryData };
+        }
     }
     
     // Format description text (preserve newlines)
@@ -2498,7 +2538,15 @@ export function searchItems(query) {
     // Parse actions
     let currentActions = parseMonsterActions(descriptionToUse);
     let quickCastAction = null; // For manual "Quick Cast"
-    const abilities = parseAbilities(descriptionToUse);
+    
+    // Prefer structured stats if available, otherwise parse description
+    let abilities = [];
+    if (data.stats && Object.keys(data.stats).length > 0) {
+        abilities = parseStatsObject(data.stats);
+    } else {
+        abilities = parseAbilities(descriptionToUse);
+    }
+
     const saves = parseSavingThrows(descriptionToUse);
 
     const abilitiesHtml = abilities.length > 0 ? `
