@@ -245,17 +245,24 @@ async function scrape() {
                 errors++;
             }
             
-            // Save periodically
+            // Save every 10 monsters to prevent data loss on crash
             if (processed % 10 === 0) {
-                fs.writeFileSync(MONSTERS_FILE, JSON.stringify(monstersData, null, 2));
+                try {
+                    fs.writeFileSync(path.join(__dirname, '../src/monsters_updated.json'), JSON.stringify(monstersData, null, 2));
+                    console.log(`Saved progress (Processed: ${processed})`);
+                } catch (err) {
+                    console.error(`Error saving progress: ${err.message}`);
+                }
             }
             
             // Be nice to the server
             await new Promise(r => setTimeout(r, 200)); 
             processed++;
         }
-
-        fs.writeFileSync(MONSTERS_FILE, JSON.stringify(monstersData, null, 2));
+        
+        // Final save
+        fs.writeFileSync(path.join(__dirname, '../src/monsters_updated.json'), JSON.stringify(monstersData, null, 2));
+        console.log("Final save complete to monsters_updated.json");
         console.log(`Done. Updated Stats: ${updated}, Downloaded Images: ${downloaded}, Errors: ${errors}`);
 
     } catch (err) {
