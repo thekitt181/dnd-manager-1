@@ -992,8 +992,13 @@ export async function addMonsterToScene(monster) {
                    // Explicitly set grid property (Required by OBR for Image items)
                    item.grid = { dpi: finalDpi, offset: { x: 0, y: 0 } };
 
+                   // CLEANUP: OBR strict validation rejects items with system fields like createdUserId/lastModified
+                   // even if they match the schema types. We must remove them before adding.
+                   delete item.createdUserId;
+                   delete item.lastModified;
+                   delete item.zIndex;
 
-                   console.log("Adding item to scene:", item);
+                   console.log("Adding item to scene (cleaned):", item);
 
                    OBR.scene.items.addItems([item])
                      .then(() => {
@@ -3421,6 +3426,11 @@ export function searchItems(query) {
                          // Explicitly set grid and other properties not covered by builder
                          cleanItem.grid = { dpi: imgDpi, offset: { x: 0, y: 0 } };
                          cleanItem.disableHit = false;
+
+                         // CLEANUP: Strip system fields that might cause validation errors
+                         delete cleanItem.createdUserId;
+                         delete cleanItem.lastModified;
+                         delete cleanItem.zIndex;
 
                          console.log("Replacing item:", oldItem.id, "with built item:", cleanItem.id);
                          
