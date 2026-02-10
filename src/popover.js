@@ -2127,10 +2127,24 @@ export function searchItems(query) {
       }
 
       // Save Image URL manually if provided
-      const newImgUrl = editorImageUrl.value.trim();
+      let newImgUrl = editorImageUrl.value.trim();
+      let imageSaved = false;
       if (newImgUrl) {
+          // Optimize URL (upload if long Base64)
+          try {
+              newImgUrl = await ensureShortImageUrl(newImgUrl);
+          } catch (e) {
+              console.warn("Failed to optimize image URL:", e);
+          }
+
           const imgKey = editorMode === 'monster' ? 'monster_image_' + name : 'item_image_' + name;
-          localStorage.setItem(imgKey, newImgUrl);
+          try {
+              localStorage.setItem(imgKey, newImgUrl);
+              imageSaved = true;
+          } catch (e) {
+              console.error("Storage limit reached, could not save image:", e);
+              alert("Warning: Local storage is full. The image could not be saved locally. Please enable the local server (npm start) to handle large images, or clear some space.");
+          }
       }
 
       if (editorMode === 'monster') {
@@ -2141,7 +2155,10 @@ export function searchItems(query) {
               cr: editorCr.value,
               type: editorType.value,
               description: editorDesc.value,
-              source: editorOriginalSource || "Custom"
+              source: editorOriginalSource || "Custom",
+              // Backup: Save image in object if it's short (not Base64) or if we want to force it
+              // We only save it in the object if it's NOT a huge data URI, to prevent bloating the main list
+              image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
           };
           saveCustomMonster(newMonster);
 
@@ -2186,7 +2203,8 @@ export function searchItems(query) {
               type: editorItemType.value,
               rarity: editorRarity.value,
               description: editorItemDesc.value,
-              source: editorOriginalSource || "Custom"
+              source: editorOriginalSource || "Custom",
+              image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
           };
           saveCustomItem(newItem);
       }
