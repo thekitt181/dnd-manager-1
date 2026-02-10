@@ -2,7 +2,7 @@ import monsters from './monsters.json';
 import items from './items.json';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
 
-const EXTENSION_VERSION = "1.2"; // Version indicator for debugging
+const EXTENSION_VERSION = "1.3"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
 
 let spawnPosition = null; // Global spawn position from URL params
@@ -962,6 +962,25 @@ async function ensureShortImageUrl(url) {
     return url;
 }
 
+// Helper to generate a dynamic placeholder image (SVG Data URI)
+function getPlaceholderImage(name, type = 'monster') {
+    const letter = name ? name.charAt(0).toUpperCase() : '?';
+    const color1 = type === 'monster' ? '#ff6b6b' : '#4a235a'; // Red for monsters, Purple for items
+    const color2 = type === 'monster' ? '#8b0000' : '#1a1025';
+
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="grad1" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+      <stop offset="0%" style="stop-color:\${color1};stop-opacity:1" />
+      <stop offset="100%" style="stop-color:\${color2};stop-opacity:1" />
+    </radialGradient>
+  </defs>
+  <circle cx="256" cy="256" r="250" fill="url(#grad1)" />
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="250" fill="white" font-family="Arial">\${letter}</text>
+</svg>`;
+    return "data:image/svg+xml;base64," + btoa(svg);
+}
+
 export async function addMonsterToScene(monster) {
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   // Use getStoredImage for case-insensitive lookup
@@ -1067,7 +1086,7 @@ export async function addMonsterToScene(monster) {
   }
 
   if (!imageUrl || imageUrl.includes('apple-touch-icon') || imageUrl.includes('unsplash')) {
-      imageUrl = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI+CiAgPGRlZnM+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9ImdyYWQxIiBjeD0iNTAlIiBjeT0iNTAlIiByPSI1MCUiIGZ4PSI1MCUiIGZ5PSI1MCUiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdHlsZT0ic3RvcC1jb2xvcjojZmY2YjZiO3N0b3Atb3BhY2l0eToxIiAvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiM4YjAwMDA7c3RvcC1vcGFjaXR5OjEiIC8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogIDwvZGVmcz4KICA8Y2lyY2xlIGN4PSIyNTYiIGN5PSIyNTYiIHI9IjI1MCIgZmlsbD0idXJsKCNncmFkMSkiIC8+CiAgPHRleHQgeD0iNTAlIiB5PSI1MCUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjUwIiBmaWxsPSJ3aGl0ZSIgZm9udC1mYW1pbHk9IkFyaWFsIj5NPC90ZXh0Pgo8L3N2Zz4=";
+      imageUrl = getPlaceholderImage(monster.name, 'monster');
   }
   
   // Ensure URL is short enough for OBR (upload if necessary)
