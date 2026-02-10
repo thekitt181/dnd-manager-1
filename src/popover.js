@@ -4612,6 +4612,14 @@ if (window.self === window.top) {
                     const storedPos = localStorage.getItem('dnd_extension_popover_pos');
                     const anchorPos = storedPos ? JSON.parse(storedPos) : { left: 200, top: 100 };
 
+                    // Force close context menu by clearing selection BEFORE opening popover
+                    // This avoids race conditions where focus is trapped in the closing menu
+                    if (itemId) {
+                         await OBR.player.select([]);
+                         // Small delay to let OBR process the selection change and close the menu
+                         await new Promise(resolve => setTimeout(resolve, 50));
+                    }
+
                     await OBR.popover.open({
                         id: 'dnd-monster-search-popover',
                         url: url,
@@ -4620,14 +4628,6 @@ if (window.self === window.top) {
                         anchorReference: "POSITION",
                         anchorPosition: anchorPos
                     });
-
-                    // Force close context menu by clearing selection
-                    // This is a workaround as the menu might persist otherwise
-                    if (itemId) {
-                         // We deselect to close the menu. 
-                         // Note: User loses selection, but they have the popover open.
-                         await OBR.player.select([]);
-                    }
                 },
             });
             console.log("Context menu created successfully");
