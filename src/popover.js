@@ -868,21 +868,30 @@ function compressImage(dataUri, quality = 0.8, maxWidth = 1000) {
 function getStoredImage(mode, name) {
     const prefix = mode === 'monster' ? 'monster_image_' : (mode === 'spell' ? 'spell_image_' : 'item_image_');
     
+    // Helper to validate retrieved value
+    const validate = (val) => {
+        if (!val) return null;
+        if (typeof val !== 'string') return null;
+        // Check for JSON-like content (likely corruption or bad paste)
+        if (val.trim().startsWith('{') || val.trim().startsWith('%7B')) return null;
+        return val;
+    };
+
     // 1. Exact match
-    let val = localStorage.getItem(prefix + name);
+    let val = validate(localStorage.getItem(prefix + name));
     if (val) return val;
     
     // 2. Lowercase match
-    val = localStorage.getItem(prefix + name.toLowerCase());
+    val = validate(localStorage.getItem(prefix + name.toLowerCase()));
     if (val) return val;
     
     // 3. Title Case match (simple)
     const titleCase = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
-    val = localStorage.getItem(prefix + titleCase);
+    val = validate(localStorage.getItem(prefix + titleCase));
     if (val) return val;
     
     // 4. Uppercase match
-    val = localStorage.getItem(prefix + name.toUpperCase());
+    val = validate(localStorage.getItem(prefix + name.toUpperCase()));
     if (val) return val;
     
     return null;
@@ -891,11 +900,20 @@ function getStoredImage(mode, name) {
 // Helper to ensure image URL is within OBR limits (2048 chars) by uploading Base64 to local server if needed
 async function ensureShortImageUrl(url) {
     if (!url) return url;
+    if (typeof url !== 'string') return null;
     
-    // Remove whitespace from Data URIs (newlines/spaces can break fetch/OBR)
-    if (url.startsWith('data:')) {
-        url = url.replace(/\s/g, '');
+    // Basic cleanup
+    url = url.trim();
+    
+    // Check for invalid content (JSON objects)
+    if (url.startsWith('{') || url.startsWith('%7B')) {
+        console.warn("Invalid Image URL detected (JSON object). Discarding.");
+        return null;
     }
+
+    // Remove whitespace from ALL URLs (newlines/spaces can break fetch/OBR)
+    // Especially critical for Data URIs
+    url = url.replace(/\s/g, '');
 
     // Attempt to compress if it's a large Data URI (> 500KB)
     if (url.startsWith('data:image') && url.length > 500000) {
@@ -945,6 +963,12 @@ export async function addMonsterToScene(monster) {
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   // Use getStoredImage for case-insensitive lookup
   let imageUrl = getStoredImage('monster', monster.name) || monster.image;
+  
+  // Robust validation: If it's not a string or looks like JSON, discard it
+  if (imageUrl && (typeof imageUrl !== 'string' || imageUrl.trim().startsWith('{') || imageUrl.trim().startsWith('%7B'))) {
+      console.warn("Invalid/Corrupt monster image URL detected. Resetting to default.");
+      imageUrl = null;
+  }
   
   // Helper to check if image exists
   const checkImage = (url) => new Promise(resolve => {
@@ -1254,7 +1278,6 @@ export async function addMonsterToScene(monster) {
       // Default Icon: A generic satchel/bag
       const defaultIcon = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cGF0aCBmaWxsPSIjRkZEMzAwIiBkPSJNMTI4IDE3NnYtNDhjMC0yNi41IDIxLjUtNDggNDgtNDhoMTYwYzI2LjUgMCA0OCAyMS41IDQ4IDQ4djQ4aDU2djMySDcydi0zMmg1NnptODAgMHYtNDhoOTZ2NDhIMjA4em0tODAgODAwdjE5MmMwIDE3LjcgMTQuMyAzMiAzMiAzMmgxOTJjMTcuNyAwIDMyLTE0LjMgMzItMzJWMjU2SDEyOHoiLz48L3N2Zz4=";
       
-      // Type-specific item images
       const itemTypeImages = {
           'sword': 'images/items/sword.svg',
           'greatsword': 'images/items/sword.svg',
@@ -1299,9 +1322,14 @@ export async function addMonsterToScene(monster) {
           'jewel': 'images/items/generic.svg'
       };
 
-      // Use item image if available, otherwise try type-specific, otherwise default
-       // Check localStorage for custom item images too
-       let imageUrl = getStoredImage('item', itemData.name) || itemData.image;
+      // Resolve image: Check storage first, then item.image
+      let imageUrl = getStoredImage('item', itemData.name) || itemData.image;
+
+      // Robust validation
+      if (imageUrl && (typeof imageUrl !== 'string' || imageUrl.trim().startsWith('{') || imageUrl.trim().startsWith('%7B'))) {
+          console.warn("Invalid/Corrupt item image URL detected. Resetting to default.");
+          imageUrl = null;
+      }
        
        // Detect 404 placeholder (Base64 for "Not Found" is Tm90IEZvdW5k)
        const isPlaceholder = imageUrl && imageUrl.startsWith('data:') && imageUrl.includes('Tm90IEZvdW5k');
