@@ -1420,57 +1420,6 @@ export async function addMonsterToScene(monster) {
       });
   }
 
-// Helper: Compress Image (to avoid localStorage limits)
- // Defaults: 300px max dimension (better quality), 0.7 quality
- function compressImage(source, maxWidth = 300, quality = 0.7) {
-     return new Promise((resolve, reject) => {
-        const img = new Image();
-        
-        // Try to enable CORS for URLs so we can draw them to canvas
-        if (typeof source === 'string' && !source.startsWith('data:')) {
-            img.crossOrigin = "Anonymous";
-        }
-
-        img.onload = () => {
-            try {
-                const canvas = document.createElement('canvas');
-                let width = img.width;
-                let height = img.height;
-
-                // Maintain aspect ratio
-                if (width > maxWidth) {
-                    height = Math.round((height * maxWidth) / width);
-                    width = maxWidth;
-                }
-                
-                // Also constrain height if it's extremely tall (e.g. vertical token)
-                if (height > maxWidth) {
-                    width = Math.round((width * maxWidth) / height);
-                    height = maxWidth;
-                }
-
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
-                
-                // Compress to JPEG
-                // This will throw SecurityError if the image is tainted (CORS)
-                resolve(canvas.toDataURL('image/jpeg', quality));
-            } catch (e) {
-                console.warn("Canvas export failed (likely CORS), using original URL:", e);
-                resolve(source);
-            }
-        };
-        
-        img.onerror = (e) => {
-            console.warn("Image load failed for compression, using original URL:", e);
-            resolve(source);
-        };
-        
-        img.src = source;
-    });
-}
 
 // Helper: Process Image and Remove Background
 function processAndRemoveBackground(source) {
