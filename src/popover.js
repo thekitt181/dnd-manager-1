@@ -949,8 +949,8 @@ async function ensureShortImageUrl(url, name = null, folder = null) {
             if (response.ok) {
                 const data = await response.json();
                 if (data.url) {
-                    // Convert relative URL to absolute
-                    const absoluteUrl = new URL(data.url, window.location.href).href;
+                    // Convert relative URL to absolute and add cache buster
+                    const absoluteUrl = new URL(data.url, window.location.href).href + `?t=${Date.now()}`;
                     console.log("Image uploaded successfully. New URL:", absoluteUrl);
                     return absoluteUrl;
                 }
@@ -2546,6 +2546,15 @@ export function searchItems(query) {
                               // Update Text Label
                               // Usually "Name\nHP: X AC: Y"
                               item.text.plainText = `${newMonster.name}\nHP: ${newMonster.hp} AC: ${newMonster.ac}`;
+                              
+                              // Update Image if changed
+                              if (newImgUrl && item.image) {
+                                  item.image.url = newImgUrl;
+                                  // Reset MIME to let OBR re-detect or default
+                                  if (newImgUrl.endsWith('.svg') || newImgUrl.includes('.svg?')) {
+                                      item.image.mime = 'image/svg+xml';
+                                  }
+                              }
                           }
                       });
                   }
