@@ -872,6 +872,7 @@ function getStoredImage(mode, name) {
     const validate = (val) => {
         if (!val) return null;
         if (typeof val !== 'string') return null;
+        if (val === 'null' || val === 'undefined') return null;
         // Check for JSON-like content (likely corruption or bad paste)
         if (val.trim().startsWith('{') || val.trim().startsWith('%7B')) return null;
         return val;
@@ -916,11 +917,12 @@ async function ensureShortImageUrl(url) {
         url = url.replace(/\s/g, '');
     }
 
-    // Attempt to compress if it's a large Data URI (> 500KB)
-    if (url.startsWith('data:image') && url.length > 500000) {
+    // Attempt to compress if it's a large Data URI (> 200KB)
+    if (url.startsWith('data:image') && url.length > 200000) {
         console.log("Image is large (" + Math.round(url.length/1024) + "KB), attempting to compress...");
         try {
-            const compressed = await compressImage(url);
+            // Try simpler compression (lower quality)
+            const compressed = await compressImage(url, 0.6);
             if (compressed.length < url.length) {
                 console.log("Compressed to " + Math.round(compressed.length/1024) + "KB");
                 url = compressed;
@@ -2462,7 +2464,7 @@ export function searchItems(query) {
               imageSaved = true;
           } catch (e) {
               console.error("Storage limit reached or save failed:", e);
-              alert("Warning: Local storage is full or corrupted. The image could not be saved locally. Please enable the local server (npm start) to handle large images, or clear some space.");
+              alert("❌ IMAGE NOT SAVED!\n\nLocal storage is full. The text data will be saved, but the image is too large.\n\nTip: Use 'npm start' to enable the local server for unlimited image storage, or use smaller images.");
           }
       } else {
           // If the URL is cleared, remove the image from storage
@@ -2605,7 +2607,13 @@ export function searchItems(query) {
           }
       }
       
-      alert(`Saved ${name}!`);
+      if (imageSaved) {
+          alert(`Saved ${name}!`);
+      } else if (newImgUrl) {
+          alert(`Saved ${name} (Text Only). Image was not saved.`);
+      } else {
+          alert(`Saved ${name}!`);
+      }
       editorView.style.display = 'none';
       searchView.style.display = 'flex';
       renderResults(input.value);
