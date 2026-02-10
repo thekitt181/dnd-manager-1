@@ -1131,13 +1131,13 @@ export async function addMonsterToScene(monster) {
       mimeType = 'image/gif';
   } else if (imageUrl.startsWith('data:image/svg+xml')) {
       mimeType = 'image/svg+xml';
-  } else if (imageUrl.match(/\.(jpeg|jpg)$/i)) {
+  } else if (imageUrl.match(/\.(jpeg|jpg)($|\?)/i)) {
       mimeType = 'image/jpeg';
-  } else if (imageUrl.match(/\.webp$/i)) {
+  } else if (imageUrl.match(/\.webp($|\?)/i)) {
       mimeType = 'image/webp';
-  } else if (imageUrl.match(/\.gif$/i)) {
+  } else if (imageUrl.match(/\.gif($|\?)/i)) {
       mimeType = 'image/gif';
-  } else if (imageUrl.match(/\.svg(\+xml)?$/i)) {
+  } else if (imageUrl.match(/\.svg(\+xml)?($|\?)/i)) {
       mimeType = 'image/svg+xml';
   }
   
