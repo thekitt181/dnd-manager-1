@@ -2182,10 +2182,14 @@ export function searchItems(query) {
       editorOriginalSource = data ? data.source : null;
       
       document.getElementById('editor-title-action').innerText = data ? "Edit" : "Create";
-      document.getElementById('editor-title-type').innerText = mode === 'monster' ? "Monster" : "Item";
-      
-      // Load Image URL if exists
-      const imgKey = mode === 'monster' ? 'monster_image_' + (data ? data.name : '') : 'item_image_' + (data ? data.name : '');
+    document.getElementById('editor-title-type').innerText = mode === 'monster' ? "Monster" : (mode === 'spell' ? "Spell" : "Item");
+    
+    // Load Image URL if exists
+      let imgKey;
+      if (mode === 'monster') imgKey = 'monster_image_' + (data ? data.name : '');
+      else if (mode === 'spell') imgKey = 'spell_image_' + (data ? data.name : '');
+      else imgKey = 'item_image_' + (data ? data.name : '');
+
       const existingImg = localStorage.getItem(imgKey);
       editorImageUrl.value = existingImg || '';
 
@@ -2301,6 +2305,8 @@ export function searchItems(query) {
       // Save Image URL manually if provided
       let newImgUrl = editorImageUrl.value.trim();
       let imageSaved = false;
+      const imgKey = editorMode === 'monster' ? 'monster_image_' + name : (editorMode === 'spell' ? 'spell_image_' + name : 'item_image_' + name);
+
       if (newImgUrl) {
           // Optimize URL (upload if long Base64)
           try {
@@ -2309,7 +2315,6 @@ export function searchItems(query) {
               console.warn("Failed to optimize image URL:", e);
           }
 
-          const imgKey = editorMode === 'monster' ? 'monster_image_' + name : 'item_image_' + name;
           try {
               localStorage.setItem(imgKey, newImgUrl);
               imageSaved = true;
@@ -2317,6 +2322,9 @@ export function searchItems(query) {
               console.error("Storage limit reached, could not save image:", e);
               alert("Warning: Local storage is full. The image could not be saved locally. Please enable the local server (npm start) to handle large images, or clear some space.");
           }
+      } else {
+          // If the URL is cleared, remove the image from storage
+          localStorage.removeItem(imgKey);
       }
 
       if (editorMode === 'monster') {
@@ -2405,14 +2413,9 @@ export function searchItems(query) {
                       customs.splice(oldIdx, 1);
                       localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customs));
 
-                      // Also migrate image if exists
+                      // Cleanup old image
                       const oldImgKey = 'monster_image_' + editorOriginalName;
-                      const newImgKey = 'monster_image_' + name;
-                      const storedImg = localStorage.getItem(oldImgKey);
-                      if (storedImg) {
-                          localStorage.setItem(newImgKey, storedImg);
-                          localStorage.removeItem(oldImgKey);
-                      }
+                      localStorage.removeItem(oldImgKey);
                   }
               } else {
                   // It was a built-in monster. Hide the original so it looks like a rename.
@@ -2428,6 +2431,10 @@ export function searchItems(query) {
                   if (confirm(`Do you want to delete the old entry "${editorOriginalName}"?`)) {
                       customs.splice(oldIdx, 1);
                       localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customs));
+
+                      // Cleanup old image
+                      const oldImgKey = 'spell_image_' + editorOriginalName;
+                      localStorage.removeItem(oldImgKey);
                   }
               } else {
                   // Built-in spell
@@ -2443,14 +2450,9 @@ export function searchItems(query) {
                       customs.splice(oldIdx, 1);
                       localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customs));
 
-                      // Also migrate image if exists
+                      // Cleanup old image
                       const oldImgKey = 'item_image_' + editorOriginalName;
-                      const newImgKey = 'item_image_' + name;
-                      const storedImg = localStorage.getItem(oldImgKey);
-                      if (storedImg) {
-                          localStorage.setItem(newImgKey, storedImg);
-                          localStorage.removeItem(oldImgKey);
-                      }
+                      localStorage.removeItem(oldImgKey);
                   }
               } else {
                   // It was a built-in item. Hide the original so it looks like a rename.
