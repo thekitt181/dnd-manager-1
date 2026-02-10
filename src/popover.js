@@ -1978,16 +1978,31 @@ export function searchItems(query) {
         </div>
         
         <div id="monster-filters" style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px;">
-            <label style="font-size: 0.9em; cursor: pointer;">
-                <input type="checkbox" id="search-name-only"> Search Name Only
-            </label>
-            <div style="display: flex; gap: 5px; align-items: center; font-size: 0.9em;">
-                <span>CR:</span>
-                <input type="text" id="min-cr-input" placeholder="Min (0)" style="width: 50px; padding: 2px;">
-                <span>-</span>
-                <input type="text" id="max-cr-input" placeholder="Max (30)" style="width: 50px; padding: 2px;">
-            </div>
-        </div>
+          <label style="font-size: 0.9em; cursor: pointer;">
+              <input type="checkbox" id="search-name-only"> Search Name Only
+          </label>
+          <div style="display: flex; gap: 5px; align-items: center; font-size: 0.9em;">
+              <span>CR:</span>
+              <input type="text" id="min-cr-input" placeholder="Min (0)" style="width: 50px; padding: 2px;">
+              <span>-</span>
+              <input type="text" id="max-cr-input" placeholder="Max (30)" style="width: 50px; padding: 2px;">
+          </div>
+      </div>
+
+      <div id="spell-tools" style="display: none; margin-bottom: 10px; background: #f9f9f9; padding: 8px; border: 1px solid #ddd; border-radius: 4px; flex-direction: column; gap: 5px;">
+          <div style="font-size: 0.9em; font-weight: bold; margin-bottom: 2px;">Quick AoE Template</div>
+          <div style="display: flex; gap: 5px;">
+              <select id="quick-aoe-shape" style="flex: 1; padding: 5px;">
+                  <option value="cone">Cone</option>
+                  <option value="radius">Sphere/Radius</option>
+                  <option value="cube">Cube</option>
+                  <option value="line">Line</option>
+                  <option value="cylinder">Cylinder</option>
+              </select>
+              <input id="quick-aoe-size" type="number" placeholder="Size (ft)" style="width: 70px; padding: 5px;">
+              <button id="quick-aoe-btn" style="padding: 5px 10px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 3px; font-weight: bold;">Place</button>
+          </div>
+      </div>
 
         <div id="results" style="overflow-y: auto; flex: 1;"></div>
         
@@ -2067,6 +2082,10 @@ export function searchItems(query) {
   const tabItems = document.getElementById('tab-items');
   const tabSpells = document.getElementById('tab-spells');
   const monsterFilters = document.getElementById('monster-filters');
+  const spellTools = document.getElementById('spell-tools');
+  const quickAoeBtn = document.getElementById('quick-aoe-btn');
+  const quickAoeShape = document.getElementById('quick-aoe-shape');
+  const quickAoeSize = document.getElementById('quick-aoe-size');
   
   const input = document.getElementById('search-input');
   const searchNameOnlyCheckbox = document.getElementById('search-name-only');
@@ -2219,6 +2238,29 @@ export function searchItems(query) {
       else if (activeTab === 'items') openEditor('item');
       else if (activeTab === 'spells') openEditor('spell');
   });
+
+  if (quickAoeBtn) {
+      quickAoeBtn.addEventListener('click', async () => {
+          const type = quickAoeShape.value;
+          const size = parseInt(quickAoeSize.value);
+          
+          if (!type || !size) {
+              alert("Please enter a size.");
+              return;
+          }
+          
+          // Try to get selected item, otherwise spawn at center
+          let targetId = null;
+          try {
+              const selection = await OBR.player.getSelection();
+              if (selection && selection.length > 0) {
+                   targetId = selection[0];
+              }
+          } catch(e) { console.warn(e); }
+          
+          spawnAoETemplate(targetId, { type, size }, 'force');
+      });
+  }
 
   editorCancelBtn.addEventListener('click', () => {
       editorView.style.display = 'none';
@@ -2659,6 +2701,7 @@ export function searchItems(query) {
       tabSpells.style.fontWeight = 'normal';
       
       monsterFilters.style.display = 'none';
+      spellTools.style.display = 'none';
       if (randomBtn) randomBtn.style.display = 'none';
 
       if (tab === 'monsters') {
@@ -2674,6 +2717,7 @@ export function searchItems(query) {
       } else if (tab === 'spells') {
           tabSpells.style.background = '#ddd';
           tabSpells.style.fontWeight = 'bold';
+          spellTools.style.display = 'flex';
           input.placeholder = "Search spells (e.g. Fireball)...";
       }
       renderResults(input.value);
