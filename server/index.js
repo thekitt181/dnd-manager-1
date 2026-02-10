@@ -104,7 +104,7 @@ app.post('/api/data', async (req, res) => {
 // Image Upload Endpoint
 app.post('/api/upload-image', async (req, res) => {
     try {
-        const { image, filename } = req.body;
+        const { image, filename, folder } = req.body;
         if (!image || !image.startsWith('data:image')) {
             return res.status(400).json({ error: 'Invalid image data' });
         }
@@ -119,24 +119,46 @@ app.post('/api/upload-image', async (req, res) => {
         const data = matches[2];
         const buffer = Buffer.from(data, 'base64');
         
+        // Determine target paths
         const safeFilename = filename 
             ? filename.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.' + ext
             : `upload_${Date.now()}_${Math.floor(Math.random() * 1000)}.` + ext;
 
-        const filePath = path.join(distPath, 'images/processed', safeFilename);
+        let relativeUrl;
         
-        // Ensure directory exists
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)){
-            fs.mkdirSync(dir, { recursive: true });
-        }
+        if (folder) {
+            // "Smart" save: Save to source (public) AND runtime (dist)
+            const safeFolder = folder.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const relativePath = `images/${safeFolder}/${safeFilename}`;
+            
+            const publicPath = path.join(__dirname, '../public', relativePath);
+            const runtimePath = path.join(distPath, relativePath);
 
-        fs.writeFileSync(filePath, buffer);
+            // 1. Save to Public (Source of Truth)
+            const publicDir = path.dirname(publicPath);
+            if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
+            fs.writeFileSync(publicPath, buffer);
+            console.log(`Saved to source: ${publicPath}`);
+
+            // 2. Save to Dist (Runtime)
+            const runtimeDir = path.dirname(runtimePath);
+            if (!fs.existsSync(runtimeDir)) fs.mkdirSync(runtimeDir, { recursive: true });
+            fs.writeFileSync(runtimePath, buffer);
+            console.log(`Saved to runtime: ${runtimePath}`);
+
+            relativeUrl = '/' + relativePath;
+        } else {
+            // Default behavior: Save to processed folder in dist only
+            const filePath = path.join(distPath, 'images/processed', safeFilename);
+            const dir = path.dirname(filePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(filePath, buffer);
+            
+            relativeUrl = `/images/processed/${safeFilename}`;
+            console.log(`Saved uploaded image to ${filePath}`);
+        }
         
-        const fileUrl = `/images/processed/${safeFilename}`;
-        console.log(`Saved uploaded image to ${filePath}`);
-        
-        res.json({ url: fileUrl });
+        res.json({ url: relativeUrl });
     } catch (err) {
         console.error("Upload failed:", err);
         res.status(500).json({ error: err.message });

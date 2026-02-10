@@ -899,7 +899,7 @@ function getStoredImage(mode, name) {
 }
 
 // Helper to ensure image URL is within OBR limits (2048 chars) by uploading Base64 to local server if needed
-async function ensureShortImageUrl(url) {
+async function ensureShortImageUrl(url, name = null, folder = null) {
     if (!url) return url;
     if (typeof url !== 'string') return null;
     
@@ -933,13 +933,17 @@ async function ensureShortImageUrl(url) {
     }
 
     // OBR limit is 2048. We give some buffer.
-    if (url.startsWith('data:image') && url.length > 2000) {
-        console.log("Image URL is too long (Base64), attempting to upload to local server...");
+    // OR if we explicitly provided a name/folder, we likely WANT to save it permanently, even if it's short.
+    // But let's stick to "if it's a Data URI" or "Too Long" to avoid unnecessary uploads of external URLs.
+    // Actually, if the user wants "perma replace", they might want to download an external URL to local too?
+    // For now, let's trigger upload if it's a Data URI (which is what usually happens with pastes/uploads)
+    if (url.startsWith('data:image')) {
+        console.log("Uploading image to local server (Persistence requested)...");
         try {
             const response = await fetch('/api/upload-image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: url })
+                body: JSON.stringify({ image: url, filename: name, folder: folder })
             });
             
             if (response.ok) {
@@ -952,11 +956,16 @@ async function ensureShortImageUrl(url) {
                 }
             } else {
                 console.warn("Upload failed with status:", response.status);
-                alert(`Image upload failed (Status: ${response.status}). Ensure the backend server is running (npm start).`);
+                // Only alert if we really needed this (i.e. it was too long)
+                if (url.length > 2000) {
+                     alert(`Image upload failed (Status: ${response.status}). Ensure the backend server is running (npm start).`);
+                }
             }
         } catch (e) {
             console.warn("Could not upload image to local server (is it running?):", e);
-            alert("Could not upload image to local server. Make sure 'npm start' is running in a separate terminal.");
+            if (url.length > 2000) {
+                alert("Could not upload image to local server. Make sure 'npm start' is running in a separate terminal.");
+            }
         }
     }
     return url;
@@ -1090,7 +1099,8 @@ export async function addMonsterToScene(monster) {
   }
   
   // Ensure URL is short enough for OBR (upload if necessary)
-  imageUrl = await ensureShortImageUrl(imageUrl);
+  // Since we are spawning a monster, if we upload, store it in 'monsters' folder with the monster name
+  imageUrl = await ensureShortImageUrl(imageUrl, monster.name, 'monsters');
 
   console.log(`[v${EXTENSION_VERSION}] Resolved imageUrl for ${monster.name}:`, imageUrl);
 
@@ -1395,7 +1405,7 @@ export async function addMonsterToScene(monster) {
       }
 
       // Ensure URL is short enough for OBR
-      imageUrl = await ensureShortImageUrl(imageUrl);
+      imageUrl = await ensureShortImageUrl(imageUrl, itemData.name, 'items');
 
       // Detect MIME
       let mimeType = 'image/svg+xml';
@@ -2468,7 +2478,11 @@ export function searchItems(query) {
       if (newImgUrl) {
           // Optimize URL (upload if long Base64)
           try {
-              newImgUrl = await ensureShortImageUrl(newImgUrl);
+              let folder = 'monsters';
+              if (editorMode === 'spell') folder = 'spells';
+              else if (editorMode !== 'monster') folder = 'items';
+              
+              newImgUrl = await ensureShortImageUrl(newImgUrl, name, folder);
           } catch (e) {
               console.warn("Failed to optimize image URL:", e);
           }
@@ -3990,7 +4004,14 @@ export function searchItems(query) {
                 // Ensure the image URL is short enough for OBR (uploads to local server if needed)
                 try {
                     saveImgBtn.innerText = "Verifying...";
-                    finalImage = await ensureShortImageUrl(finalImage);
+                    
+                    // Determine folder based on data type
+                    let folder = 'monsters';
+                    if (data && (data.rarity || data.type === 'Weapon' || data.type === 'Armor' || data.type === 'Potion')) {
+                        folder = 'items';
+                    }
+                    
+                    finalImage = await ensureShortImageUrl(finalImage, data.name, folder);
                 } catch (uploadErr) {
                     console.error("Image optimization failed:", uploadErr);
                     // Fallthrough to try saving anyway, though it might fail OBR validation
@@ -4001,7 +4022,11 @@ export function searchItems(query) {
                 console.error("Processing failed, using original", e);
                 // Try with original image, but still ensure it's short enough
                 try {
-                     newImage = await ensureShortImageUrl(newImage);
+                     let folder = 'monsters';
+                     if (data && (data.rarity || data.type === 'Weapon' || data.type === 'Armor' || data.type === 'Potion')) {
+                        folder = 'items';
+                     }
+                     newImage = await ensureShortImageUrl(newImage, data.name, folder);
                 } catch (ignore) {}
                 await saveAndApply(newImage);
             } finally {
