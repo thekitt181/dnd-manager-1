@@ -788,6 +788,12 @@ export function searchMonsters(query, searchNameOnly = false, minCrStr = '', max
 // Helper to ensure image URL is within OBR limits (2048 chars) by uploading Base64 to local server if needed
 async function ensureShortImageUrl(url) {
     if (!url) return url;
+    
+    // Remove whitespace from Data URIs (newlines/spaces can break fetch/OBR)
+    if (url.startsWith('data:')) {
+        url = url.replace(/\s/g, '');
+    }
+
     // OBR limit is 2048. We give some buffer.
     if (url.startsWith('data:image') && url.length > 2000) {
         console.log("Image URL is too long (Base64), attempting to upload to local server...");
@@ -2481,10 +2487,10 @@ export function searchItems(query) {
           for (let i = 0; i < localStorage.length; i++) {
               const key = localStorage.key(i);
               // Backup our keys: custom data, deleted items, images
-              if (key.startsWith('dnd_extension_') || key.startsWith('monster_image_') || key.startsWith('item_image_')) {
-                  data[key] = localStorage.getItem(key);
-                  count++;
-              }
+            if (key.startsWith('dnd_extension_') || key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) {
+                data[key] = localStorage.getItem(key);
+                count++;
+            }
           }
           
           if (count === 0) {
