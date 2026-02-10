@@ -2,7 +2,7 @@ import monsters from './monsters.json';
 import items from './items.json';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
 
-const EXTENSION_VERSION = "1.3"; // Version indicator for debugging
+const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
 
 let spawnPosition = null; // Global spawn position from URL params
