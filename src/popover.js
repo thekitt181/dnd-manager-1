@@ -711,6 +711,41 @@ function saveCustomItem(item) {
     restoreItem(item.name);
 }
 
+function getCustomSpells() {
+    try { return JSON.parse(localStorage.getItem('dnd_extension_custom_spells') || '[]'); } catch (e) { return []; }
+}
+
+function saveCustomSpell(spell) {
+    const list = getCustomSpells();
+    const index = list.findIndex(s => s.name === spell.name);
+    if (index >= 0) list[index] = spell;
+    else list.push(spell);
+    localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(list));
+    saveToBackend();
+}
+
+export function searchSpells(query) {
+  const deleted = getDeletedItems();
+  const customs = getCustomSpells();
+  
+  // Merge built-in SPELL_DATA with custom spells
+  // SPELL_DATA is an object { name: details }, so we convert to array
+  const builtInSpells = Object.entries(SPELL_DATA).map(([name, data]) => ({ name, ...data }));
+  
+  // Filter out built-ins overridden by customs
+  const activeBuiltIns = builtInSpells.filter(s => !customs.some(c => c.name === s.name));
+  
+  const allSpells = [...customs, ...activeBuiltIns].filter(s => !deleted.includes(s.name));
+  
+  if (!query) return allSpells.slice(0, 50);
+  
+  const lowerQuery = query.toLowerCase();
+  return allSpells.filter(s => 
+      s.name.toLowerCase().includes(lowerQuery) ||
+      (s.description && s.description.toLowerCase().includes(lowerQuery))
+  ).slice(0, 50);
+}
+
 export function searchMonsters(query, searchNameOnly = false, minCrStr = '', maxCrStr = '') {
   const deleted = getDeletedItems();
   const customs = getCustomMonsters();
@@ -1777,12 +1812,28 @@ export function searchItems(query) {
 
 // Helper: Spawn Moveable AoE Template
   async function spawnAoETemplate(itemId, aoe, damageType = 'force') {
-      if (!itemId || !OBR) return;
+      if (!OBR) return;
       
       try {
-          const items = await OBR.scene.items.getItems([itemId]);
-          if (items.length === 0) return;
-          const targetItem = items[0];
+          let targetX = 0;
+          let targetY = 0;
+          let targetRotation = 0;
+
+          if (itemId) {
+              const items = await OBR.scene.items.getItems([itemId]);
+              if (items.length > 0) {
+                  const targetItem = items[0];
+                  targetX = targetItem.position.x;
+                  targetY = targetItem.position.y;
+                  targetRotation = targetItem.rotation || 0;
+              }
+          } else {
+             try {
+                const pos = await OBR.viewport.getPosition();
+                targetX = pos.x;
+                targetY = pos.y;
+             } catch(e) { console.warn(e); }
+          }
           
           // Get Color based on damage type
           const { fillColor, strokeColor } = getEffectShapeData(damageType);
@@ -1805,8 +1856,8 @@ export function searchItems(query) {
                   .layer('PROP')
                   .locked(false)
                   .disableHit(false)
-                  .position({ x: targetItem.position.x, y: targetItem.position.y })
-                  .rotation(targetItem.rotation || 0);
+                  .position({ x: targetX, y: targetY })
+                  .rotation(targetRotation);
           };
 
           let templateItem;
@@ -1916,6 +1967,7 @@ export function searchItems(query) {
       <div id="tabs" style="display: flex; gap: 5px; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
         <button id="tab-monsters" style="flex: 1; padding: 5px; cursor: pointer; background: #ddd; border: none; font-weight: bold;">Monsters</button>
         <button id="tab-items" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Items</button>
+        <button id="tab-spells" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Spells</button>
       </div>
 
       <div id="search-view" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
@@ -1979,6 +2031,30 @@ export function searchItems(query) {
                  <textarea id="editor-item-desc" placeholder="Description..." style="height: 150px; padding: 5px; width: 100%; box-sizing: border-box; font-family: monospace;"></textarea>
             </div>
 
+            <!-- Spell Specific -->
+            <div id="editor-spell-fields" style="display: none; flex-direction: column; gap: 8px;">
+                 <div style="display: flex; gap: 5px;">
+                     <input id="editor-spell-level" placeholder="Level (0-9)" type="number" min="0" max="9" style="flex: 1; padding: 5px;">
+                     <input id="editor-spell-school" placeholder="School (e.g. Evocation)" style="flex: 2; padding: 5px;">
+                 </div>
+                 <div style="background: #f5f5f5; padding: 5px; border-radius: 4px; border: 1px solid #ddd;">
+                    <label style="display: block; font-size: 0.8em; margin-bottom: 3px; font-weight: bold;">Area of Effect (Shape & Size)</label>
+                    <div style="display: flex; gap: 5px;">
+                        <select id="editor-spell-shape" style="flex: 1; padding: 5px;">
+                            <option value="">None (Target)</option>
+                            <option value="cone">Cone</option>
+                            <option value="radius">Sphere/Radius</option>
+                            <option value="cube">Cube</option>
+                            <option value="line">Line</option>
+                            <option value="cylinder">Cylinder</option>
+                        </select>
+                        <input id="editor-spell-size" type="number" placeholder="Size (ft)" style="width: 80px; padding: 5px;">
+                    </div>
+                    <button id="editor-cast-shape-btn" style="width: 100%; margin-top: 5px; padding: 5px; background: #666; color: white; border: none; cursor: pointer; border-radius: 3px;">Cast Custom Shape Now</button>
+                 </div>
+                 <textarea id="editor-spell-desc" placeholder="Description / Details..." style="height: 150px; padding: 5px; width: 100%; box-sizing: border-box; font-family: monospace;"></textarea>
+            </div>
+
             <button id="editor-save-btn" style="padding: 10px; background: #4CAF50; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 10px; border-radius: 4px;">Save Custom Entry</button>
         </div>
       </div>
@@ -1989,6 +2065,7 @@ export function searchItems(query) {
 
   const tabMonsters = document.getElementById('tab-monsters');
   const tabItems = document.getElementById('tab-items');
+  const tabSpells = document.getElementById('tab-spells');
   const monsterFilters = document.getElementById('monster-filters');
   
   const input = document.getElementById('search-input');
@@ -2011,6 +2088,7 @@ export function searchItems(query) {
   const editorImageUrl = document.getElementById('editor-image-url');
   const editorMonsterFields = document.getElementById('editor-monster-fields');
   const editorItemFields = document.getElementById('editor-item-fields');
+  const editorSpellFields = document.getElementById('editor-spell-fields');
   
   const editorHp = document.getElementById('editor-hp');
   const editorAc = document.getElementById('editor-ac');
@@ -2021,6 +2099,13 @@ export function searchItems(query) {
   const editorItemType = document.getElementById('editor-item-type');
   const editorRarity = document.getElementById('editor-rarity');
   const editorItemDesc = document.getElementById('editor-item-desc');
+
+  const editorSpellLevel = document.getElementById('editor-spell-level');
+  const editorSpellSchool = document.getElementById('editor-spell-school');
+  const editorSpellShape = document.getElementById('editor-spell-shape');
+  const editorSpellSize = document.getElementById('editor-spell-size');
+  const editorCastShapeBtn = document.getElementById('editor-cast-shape-btn');
+  const editorSpellDesc = document.getElementById('editor-spell-desc');
 
   // Fix PDF Copy-Paste Artifacts (e.g. "Text%With%Percents" instead of spaces)
   const cleanPdfPaste = (e) => {
@@ -2088,6 +2173,7 @@ export function searchItems(query) {
       if (mode === 'monster') {
           editorMonsterFields.style.display = 'flex';
           editorItemFields.style.display = 'none';
+          editorSpellFields.style.display = 'none';
           
           editorName.value = data ? data.name : '';
           editorHp.value = data ? data.hp || '' : '';
@@ -2095,9 +2181,27 @@ export function searchItems(query) {
           editorCr.value = data ? data.cr || '' : '';
           editorType.value = data ? data.type || '' : '';
           editorDesc.value = data ? data.description || '' : '';
+      } else if (mode === 'spell') {
+          editorMonsterFields.style.display = 'none';
+          editorItemFields.style.display = 'none';
+          editorSpellFields.style.display = 'flex';
+          
+          editorName.value = data ? data.name : '';
+          editorSpellLevel.value = data ? (data.level !== undefined ? data.level : '') : '';
+          editorSpellSchool.value = data ? data.school || '' : '';
+          editorSpellDesc.value = data ? data.description || '' : '';
+          
+          if (data && data.aoe) {
+              editorSpellShape.value = data.aoe.type;
+              editorSpellSize.value = data.aoe.size;
+          } else {
+              editorSpellShape.value = "";
+              editorSpellSize.value = "";
+          }
       } else {
           editorMonsterFields.style.display = 'none';
           editorItemFields.style.display = 'flex';
+          editorSpellFields.style.display = 'none';
           
           editorName.value = data ? data.name : '';
           editorItemType.value = data ? data.type || '' : '';
@@ -2111,13 +2215,39 @@ export function searchItems(query) {
   };
 
   createBtn.addEventListener('click', () => {
-      openEditor(activeTab === 'monsters' ? 'monster' : 'item');
+      if (activeTab === 'monsters') openEditor('monster');
+      else if (activeTab === 'items') openEditor('item');
+      else if (activeTab === 'spells') openEditor('spell');
   });
 
   editorCancelBtn.addEventListener('click', () => {
       editorView.style.display = 'none';
       searchView.style.display = 'flex';
   });
+  
+  // Cast Shape Button in Editor
+  if (editorCastShapeBtn) {
+      editorCastShapeBtn.addEventListener('click', async () => {
+          const type = editorSpellShape.value;
+          const size = parseInt(editorSpellSize.value);
+          
+          if (!type || !size) {
+              alert("Please select a shape and size first.");
+              return;
+          }
+          
+          // Try to get selected item, otherwise spawn at center
+          let targetId = null;
+          try {
+              const selection = await OBR.player.getSelection();
+              if (selection && selection.length > 0) {
+                   targetId = selection[0];
+              }
+          } catch(e) { console.warn(e); }
+          
+          spawnAoETemplate(targetId, { type, size }, 'force');
+      });
+  }
 
   editorSaveBtn.addEventListener('click', async () => {
       const name = editorName.value.trim();
@@ -2197,6 +2327,19 @@ export function searchItems(query) {
               console.error("Failed to sync tokens:", e);
           }
 
+      } else if (editorMode === 'spell') {
+          const aoeType = editorSpellShape.value;
+          const aoeSize = parseInt(editorSpellSize.value);
+          
+          const newSpell = {
+              name: name,
+              level: parseInt(editorSpellLevel.value) || 0,
+              school: editorSpellSchool.value,
+              description: editorSpellDesc.value,
+              source: editorOriginalSource || "Custom",
+              aoe: (aoeType && aoeSize) ? { type: aoeType, size: aoeSize } : undefined
+          };
+          saveCustomSpell(newSpell);
       } else {
           const newItem = {
               name: name,
@@ -2231,6 +2374,21 @@ export function searchItems(query) {
                   }
               } else {
                   // It was a built-in monster. Hide the original so it looks like a rename.
+                  if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
+                      deleteItem(editorOriginalName);
+                  }
+              }
+          } else if (editorMode === 'spell') {
+              const customs = getCustomSpells();
+              const oldIdx = customs.findIndex(s => s.name === editorOriginalName);
+              if (oldIdx !== -1) {
+                  // It was a custom spell
+                  if (confirm(`Do you want to delete the old entry "${editorOriginalName}"?`)) {
+                      customs.splice(oldIdx, 1);
+                      localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customs));
+                  }
+              } else {
+                  // Built-in spell
                   if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
                       deleteItem(editorOriginalName);
                   }
@@ -2491,28 +2649,39 @@ export function searchItems(query) {
   // Tab Logic
   const switchTab = (tab) => {
       activeTab = tab;
+      
+      // Reset all tabs
+      tabMonsters.style.background = '#f0f0f0';
+      tabMonsters.style.fontWeight = 'normal';
+      tabItems.style.background = '#f0f0f0';
+      tabItems.style.fontWeight = 'normal';
+      tabSpells.style.background = '#f0f0f0';
+      tabSpells.style.fontWeight = 'normal';
+      
+      monsterFilters.style.display = 'none';
+      if (randomBtn) randomBtn.style.display = 'none';
+
       if (tab === 'monsters') {
           tabMonsters.style.background = '#ddd';
           tabMonsters.style.fontWeight = 'bold';
-          tabItems.style.background = '#f0f0f0';
-          tabItems.style.fontWeight = 'normal';
           monsterFilters.style.display = 'flex';
-          if (randomBtn) randomBtn.style.display = 'none';
           input.placeholder = "Search monsters (e.g. Goblin)...";
-      } else {
+      } else if (tab === 'items') {
           tabItems.style.background = '#ddd';
           tabItems.style.fontWeight = 'bold';
-          tabMonsters.style.background = '#f0f0f0';
-          tabMonsters.style.fontWeight = 'normal';
-          monsterFilters.style.display = 'none';
           if (randomBtn) randomBtn.style.display = 'block';
           input.placeholder = "Search items (e.g. Sword)...";
+      } else if (tab === 'spells') {
+          tabSpells.style.background = '#ddd';
+          tabSpells.style.fontWeight = 'bold';
+          input.placeholder = "Search spells (e.g. Fireball)...";
       }
       renderResults(input.value);
   };
 
   tabMonsters.addEventListener('click', () => switchTab('monsters'));
   tabItems.addEventListener('click', () => switchTab('items'));
+  tabSpells.addEventListener('click', () => switchTab('spells'));
 
   // Random Item Logic
   if (randomBtn) {
@@ -2540,13 +2709,27 @@ export function searchItems(query) {
     searchView.style.display = 'none';
     statsView.style.display = 'block';
     
-    const isItem = (!data.hp && !data.ac);
+    const isSpell = data.level !== undefined || data.school !== undefined || (data.aoe !== undefined);
+    const isItem = !isSpell && (!data.hp && !data.ac);
 
     // Try to find fresh data from the library
     let libraryData = null;
     let descriptionToUse = data.description;
     
-    if (isItem) {
+    if (isSpell) {
+        const customSpells = getCustomSpells();
+        libraryData = customSpells.find(s => s.name === data.name);
+        
+        if (!libraryData && typeof SPELL_DATA !== 'undefined') {
+            libraryData = SPELL_DATA[data.name];
+            if (libraryData) libraryData.name = data.name; // Ensure name is present
+        }
+        
+        if (libraryData) {
+            descriptionToUse = libraryData.description;
+            data = { ...data, ...libraryData };
+        }
+    } else if (isItem) {
         // Check custom items first
         const customItems = getCustomItems();
         libraryData = customItems.find(i => i.name === data.name);
@@ -2587,7 +2770,22 @@ export function searchItems(query) {
     // Check if we have an item ID to allow editing
     let statsInputs = '';
     
-    if (isItem) {
+    if (isSpell) {
+        statsInputs = `
+            <div style="margin-bottom: 5px; font-size: 0.9em; color: #555;">
+                <strong>Level ${data.level} ${data.school || 'Spell'}</strong>
+            </div>
+            ${data.aoe ? `
+            <div style="margin-bottom: 5px; padding: 5px; background: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 4px;">
+                <strong>AoE:</strong> ${data.aoe.size}ft ${data.aoe.type}
+            </div>` : ''}
+            
+            <button id="cast-spell-btn" style="width: 100%; margin-bottom: 5px; background-color: #673ab7; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer; font-weight: bold;">Cast / Place Template</button>
+            <button id="edit-btn" style="width: 100%; margin-bottom: 5px; background-color: #2196F3; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Edit / Rename</button>
+            <button id="share-description-btn" style="width: 100%; margin-bottom: 5px; background-color: #FF9800; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
+            <button id="delete-item-btn" style="width: 100%; margin-bottom: 10px; background-color: #d32f2f; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Delete from List</button>
+        `;
+    } else if (isItem) {
         statsInputs = `
             <div style="margin-bottom: 5px; font-size: 0.9em; color: #555;">
                 <strong>${data.type || 'Unknown Type'}</strong>
@@ -2733,7 +2931,19 @@ export function searchItems(query) {
         </div>
     `;
 
-    if (isItem) {
+    if (isSpell) {
+        statsContent.innerHTML = `
+          <h2>${data.name.split('\n')[0]}</h2>
+          <div style="margin-bottom: 10px;">
+            ${statsInputs}
+            ${manualSpellHtml}
+            <div id="actions-wrapper"></div>
+          </div>
+          <hr>
+          <div style="white-space: pre-wrap; font-family: sans-serif;">${descriptionToUse || 'No details.'}</div>
+          <p style="margin-top: 10px; font-size: 0.8em; color: #666;"><em>${data.source || 'Unknown Source'}</em></p>
+        `;
+    } else if (isItem) {
         let flavorHtml = '';
         let detailsHtml = '';
         
@@ -2944,6 +3154,52 @@ export function searchItems(query) {
         }
     }
 
+    if (isSpell) {
+        const deleteBtn = document.getElementById('delete-item-btn');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', () => {
+                if (confirm(`Are you sure you want to remove "${data.name}" from the list? This will hide it from search results.`)) {
+                    deleteItem(data.name);
+                    statsView.style.display = 'none';
+                    searchView.style.display = 'flex';
+                    const input = document.getElementById('search-input');
+                    if (input) renderResults(input.value);
+                }
+            });
+        }
+
+        const castBtn = document.getElementById('cast-spell-btn');
+        if (castBtn) {
+            castBtn.addEventListener('click', async () => {
+                let targetId = itemId;
+                if (!targetId && OBR.player) {
+                     try {
+                         const selection = await OBR.player.getSelection();
+                         if (selection && selection.length > 0) {
+                             targetId = selection[0];
+                         }
+                     } catch(e) { console.warn(e); }
+                }
+                
+                if (data.aoe) {
+                     let dtype = 'force';
+                     const n = data.name.toLowerCase();
+                     if (n.includes('fire') || n.includes('burn') || n.includes('flame')) dtype = 'fire';
+                     else if (n.includes('cold') || n.includes('ice') || n.includes('frost')) dtype = 'cold';
+                     else if (n.includes('lightning') || n.includes('thunder') || n.includes('storm')) dtype = 'lightning';
+                     else if (n.includes('acid') || n.includes('poison') || n.includes('venom')) dtype = 'acid';
+                     else if (n.includes('necrotic') || n.includes('death') || n.includes('wither')) dtype = 'necrotic';
+                     else if (n.includes('radiant') || n.includes('sun') || n.includes('holy')) dtype = 'radiant';
+                     else if (n.includes('psychic') || n.includes('mind')) dtype = 'psychic';
+                     
+                     spawnAoETemplate(targetId, data.aoe, dtype);
+                } else {
+                     alert("No AoE shape defined for this spell.");
+                }
+            });
+        }
+    }
+
     // Roll Handler Logic (Defined here to close over currentActions)
     const handleRoll = async (e) => {
         // Find closest button (in case of icon clicks)
@@ -3032,7 +3288,7 @@ export function searchItems(query) {
             const spellIndex = parseInt(btn.getAttribute('data-spell-index'), 10);
             const spell = action.spells[spellIndex];
             
-            if (spell && spell.aoe && itemId) {
+            if (spell && spell.aoe) {
                  let dmgType = 'force';
                  const n = spell.name.toLowerCase();
                  // Simple keyword matching for effect color
@@ -3047,7 +3303,7 @@ export function searchItems(query) {
                  spawnAoETemplate(itemId, spell.aoe, dmgType);
                  resultText = `Placed ${spell.aoe.size}ft ${spell.aoe.type} template for ${spell.name}.`;
             } else {
-                 resultText = "Error: AoE data missing or no token selected.";
+                 resultText = "Error: AoE data missing.";
             }
         } else if (type === 'save') {
             resultText = `Requests DC ${action.save.dc} ${action.save.stat} Save against ${action.name}`;
@@ -3056,12 +3312,12 @@ export function searchItems(query) {
                 triggerDamageEffect(itemId, dmgType);
             }
         } else if (type === 'aoe-template') {
-            if (action.aoe && itemId) {
+            if (action.aoe) {
                 const dmgType = (action.damages && action.damages.length > 0) ? action.damages[0].type : 'force';
                 spawnAoETemplate(itemId, action.aoe, dmgType);
                 resultText = `Placed ${action.aoe.size}ft ${action.aoe.type} template.`;
             } else {
-                resultText = "Error: AoE data missing or no token selected.";
+                resultText = "Error: AoE data missing.";
             }
         }
         
@@ -3144,24 +3400,38 @@ export function searchItems(query) {
             return;
         }
         
-        const matches = Object.keys(SPELL_DATA).filter(k => k.includes(val)).slice(0, 20); // Limit results
+        const customSpells = getCustomSpells();
+        const customNames = customSpells.map(s => s.name);
+        const builtInNames = Object.keys(SPELL_DATA);
+        // Combine and dedup (custom overrides built-in)
+        const allNames = [...new Set([...customNames, ...builtInNames])];
+        
+        const matches = allNames.filter(k => k.toLowerCase().includes(val)).slice(0, 20); // Limit results
         if (matches.length === 0) {
              msResults.style.display = 'none';
              return;
         }
         
-        msResults.innerHTML = matches.map(k => `
+        msResults.innerHTML = matches.map(k => {
+            let sData = customSpells.find(s => s.name === k);
+            if (!sData) sData = SPELL_DATA[k];
+            const lvl = (sData && sData.level !== undefined) ? sData.level : 0;
+            return `
             <div class="ms-item" data-key="${k}" style="padding: 5px; cursor: pointer; border-bottom: 1px solid #eee;">
-                <strong>${k}</strong> <span style="font-size: 0.8em; color: #666;">${SPELL_DATA[k].level > 0 ? 'Lvl '+SPELL_DATA[k].level : 'Cantrip'}</span>
+                <strong>${k}</strong> <span style="font-size: 0.8em; color: #666;">${lvl > 0 ? 'Lvl '+lvl : 'Cantrip'}</span>
             </div>
-        `).join('');
+            `;
+        }).join('');
         msResults.style.display = 'block';
         
         msResults.querySelectorAll('.ms-item').forEach(item => {
             item.addEventListener('click', () => {
                 const key = item.dataset.key;
-                const data = SPELL_DATA[key];
-                const baseLevel = data.level || 0;
+                
+                let data = customSpells.find(s => s.name === key);
+                if (!data) data = SPELL_DATA[key];
+                
+                const baseLevel = (data && data.level !== undefined) ? data.level : 0;
                 
                 const createQuickAction = (castLevel) => {
                      const displayName = key.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -3576,7 +3846,27 @@ export function searchItems(query) {
     const editBtn = document.getElementById('edit-btn');
     if (editBtn) {
         editBtn.addEventListener('click', () => {
-             openEditor(isItem ? 'item' : 'monster', { ...data, description: descriptionToUse });
+             if (isSpell) {
+                 openEditor('spell', { ...data, description: descriptionToUse });
+             } else {
+                 openEditor(isItem ? 'item' : 'monster', { ...data, description: descriptionToUse });
+             }
+        });
+    }
+
+    const castSpellBtn = document.getElementById('cast-spell-btn');
+    if (castSpellBtn) {
+        castSpellBtn.addEventListener('click', async () => {
+             const selection = await OBR.player.getSelection();
+             if (selection && selection.length > 0) {
+                 if (data.aoe) {
+                     spawnAoETemplate(selection[0], data.aoe, data.type || 'force');
+                 } else {
+                     alert("This spell has no AoE shape defined.");
+                 }
+             } else {
+                 alert("Please select a token to cast this spell from.");
+             }
         });
     }
   };
@@ -3596,12 +3886,20 @@ export function searchItems(query) {
             <small>HP: ${m.hp}, AC: ${m.ac} | ${m.source}</small>
           </div>
         `).join('');
-    } else {
+    } else if (activeTab === 'items') {
         const results = searchItems(query);
         html = results.map((item, index) => `
           <div class="result-card item-card" data-index="${index}" style="border: 1px solid #ccc; padding: 12px; margin-bottom: 5px; cursor: pointer; background: #fff; color: #000; border-radius: 4px;">
             <strong>${item.name}</strong><br>
             <small>${item.type} | ${item.source}</small>
+          </div>
+        `).join('');
+    } else if (activeTab === 'spells') {
+        const results = searchSpells(query);
+        html = results.map((spell, index) => `
+          <div class="result-card spell-card" data-index="${index}" style="border: 1px solid #ccc; padding: 12px; margin-bottom: 5px; cursor: pointer; background: #fff; color: #000; border-radius: 4px;">
+            <strong>${spell.name}</strong><br>
+            <small>Lvl ${spell.level !== undefined ? spell.level : '?'} ${spell.school || ''} | ${spell.source || 'SRD'}</small>
           </div>
         `).join('');
     }
@@ -3755,10 +4053,14 @@ export function searchItems(query) {
             const results = searchMonsters(query, searchNameOnly, minCr, maxCr);
             const monster = results[index];
             await handleMonsterClick(monster);
-        } else {
+        } else if (activeTab === 'items') {
             const results = searchItems(query);
             const item = results[index];
             showStats(item);
+        } else if (activeTab === 'spells') {
+            const results = searchSpells(query);
+            const spell = results[index];
+            showStats(spell);
         }
       });
     });
