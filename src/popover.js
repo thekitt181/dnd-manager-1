@@ -668,13 +668,14 @@ async function saveToBackend() {
     try {
         const monsters = getCustomMonsters();
         const items = getCustomItems();
+        const spells = getCustomSpells();
         const deleted = getDeletedItems();
         
         // Collect images from localStorage
         const images = {};
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_'))) {
+            if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_'))) {
                 images[key] = localStorage.getItem(key);
             }
         }
@@ -682,7 +683,7 @@ async function saveToBackend() {
         await fetch(`${API_BASE}/data`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ monsters, items, deleted, images })
+            body: JSON.stringify({ monsters, items, spells, deleted, images })
         });
     } catch (e) {
         // Silent fail
@@ -690,25 +691,47 @@ async function saveToBackend() {
 }
 
 function saveCustomMonster(monster) {
-    const list = getCustomMonsters();
-    const index = list.findIndex(m => m.name === monster.name);
-    if (index >= 0) list[index] = monster;
-    else list.push(monster);
-    localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(list));
-    saveToBackend(); // Sync to backend
-    restoreItem(monster.name);
+    try {
+        const list = getCustomMonsters();
+        const index = list.findIndex(m => m.name === monster.name);
+        if (index >= 0) list[index] = monster;
+        else list.push(monster);
+        localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(list));
+        saveToBackend(); // Sync to backend
+        restoreItem(monster.name);
+        return true;
+    } catch (e) {
+        console.error("Failed to save custom monster:", e);
+        if (e.name === 'QuotaExceededError' || e.message.includes('quota')) {
+            alert("Storage Full! Cannot save monster data. Please delete some custom images or items to free up space.");
+        } else {
+            alert("Failed to save monster data: " + e.message);
+        }
+        return false;
+    }
 }
 function getCustomItems() {
     try { return JSON.parse(localStorage.getItem('dnd_extension_custom_items') || '[]'); } catch (e) { return []; }
 }
 function saveCustomItem(item) {
-    const list = getCustomItems();
-    const index = list.findIndex(i => i.name === item.name);
-    if (index >= 0) list[index] = item;
-    else list.push(item);
-    localStorage.setItem('dnd_extension_custom_items', JSON.stringify(list));
-    saveToBackend();
-    restoreItem(item.name);
+    try {
+        const list = getCustomItems();
+        const index = list.findIndex(i => i.name === item.name);
+        if (index >= 0) list[index] = item;
+        else list.push(item);
+        localStorage.setItem('dnd_extension_custom_items', JSON.stringify(list));
+        saveToBackend();
+        restoreItem(item.name);
+        return true;
+    } catch (e) {
+        console.error("Failed to save custom item:", e);
+        if (e.name === 'QuotaExceededError' || e.message.includes('quota')) {
+            alert("Storage Full! Cannot save item data. Please delete some custom images or items to free up space.");
+        } else {
+            alert("Failed to save item data: " + e.message);
+        }
+        return false;
+    }
 }
 
 function getCustomSpells() {
@@ -716,12 +739,24 @@ function getCustomSpells() {
 }
 
 function saveCustomSpell(spell) {
-    const list = getCustomSpells();
-    const index = list.findIndex(s => s.name === spell.name);
-    if (index >= 0) list[index] = spell;
-    else list.push(spell);
-    localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(list));
-    saveToBackend();
+    try {
+        const list = getCustomSpells();
+        const index = list.findIndex(s => s.name === spell.name);
+        if (index >= 0) list[index] = spell;
+        else list.push(spell);
+        localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(list));
+        saveToBackend();
+        restoreItem(spell.name);
+        return true;
+    } catch (e) {
+        console.error("Failed to save custom spell:", e);
+        if (e.name === 'QuotaExceededError' || e.message.includes('quota')) {
+            alert("Storage Full! Cannot save spell data. Please delete some custom images or items to free up space.");
+        } else {
+            alert("Failed to save spell data: " + e.message);
+        }
+        return false;
+    }
 }
 
 export function searchSpells(query) {
@@ -785,6 +820,74 @@ export function searchMonsters(query, searchNameOnly = false, minCrStr = '', max
   }).slice(0, 50); // Limit to 50 results for performance
 }
 
+// Helper: Compress Data URI if too large
+function compressImage(dataUri, quality = 0.8, maxWidth = 1000) {
+    return new Promise((resolve) => {
+        // Only compress if it's a Data URI
+        if (!dataUri || !dataUri.startsWith('data:image')) {
+            resolve(dataUri);
+            return;
+        }
+
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let w = img.width;
+            let h = img.height;
+            
+            // Resize if too big
+            if (w > maxWidth) {
+                h = Math.round(h * (maxWidth / w));
+                w = maxWidth;
+            }
+            
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            
+            // Convert to JPEG for better compression (unless it was SVG/WebP, but JPEG is safest for size)
+            // If original was PNG with transparency, JPEG turns it black. 
+            // Better to use 'image/webp' if supported, or stick to 'image/png' but resized.
+            // Let's try WebP first, fallback to PNG
+            let newUrl = canvas.toDataURL('image/webp', quality);
+            if (newUrl.length < dataUri.length) {
+                resolve(newUrl);
+            } else {
+                 // Try PNG with resizing only
+                 newUrl = canvas.toDataURL('image/png');
+                 resolve(newUrl.length < dataUri.length ? newUrl : dataUri);
+            }
+        };
+        img.onerror = () => resolve(dataUri);
+        img.src = dataUri;
+    });
+}
+
+// Helper: Get Stored Image with Case-Insensitive Fallback
+function getStoredImage(mode, name) {
+    const prefix = mode === 'monster' ? 'monster_image_' : (mode === 'spell' ? 'spell_image_' : 'item_image_');
+    
+    // 1. Exact match
+    let val = localStorage.getItem(prefix + name);
+    if (val) return val;
+    
+    // 2. Lowercase match
+    val = localStorage.getItem(prefix + name.toLowerCase());
+    if (val) return val;
+    
+    // 3. Title Case match (simple)
+    const titleCase = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+    val = localStorage.getItem(prefix + titleCase);
+    if (val) return val;
+    
+    // 4. Uppercase match
+    val = localStorage.getItem(prefix + name.toUpperCase());
+    if (val) return val;
+    
+    return null;
+}
+
 // Helper to ensure image URL is within OBR limits (2048 chars) by uploading Base64 to local server if needed
 async function ensureShortImageUrl(url) {
     if (!url) return url;
@@ -792,6 +895,20 @@ async function ensureShortImageUrl(url) {
     // Remove whitespace from Data URIs (newlines/spaces can break fetch/OBR)
     if (url.startsWith('data:')) {
         url = url.replace(/\s/g, '');
+    }
+
+    // Attempt to compress if it's a large Data URI (> 500KB)
+    if (url.startsWith('data:image') && url.length > 500000) {
+        console.log("Image is large (" + Math.round(url.length/1024) + "KB), attempting to compress...");
+        try {
+            const compressed = await compressImage(url);
+            if (compressed.length < url.length) {
+                console.log("Compressed to " + Math.round(compressed.length/1024) + "KB");
+                url = compressed;
+            }
+        } catch (e) {
+            console.warn("Compression failed:", e);
+        }
     }
 
     // OBR limit is 2048. We give some buffer.
@@ -826,7 +943,8 @@ async function ensureShortImageUrl(url) {
 
 export async function addMonsterToScene(monster) {
   // Ensure we have a valid image URL (check localStorage first, then fallback)
-  let imageUrl = localStorage.getItem(`monster_image_${monster.name}`) || monster.image;
+  // Use getStoredImage for case-insensitive lookup
+  let imageUrl = getStoredImage('monster', monster.name) || monster.image;
   
   // Helper to check if image exists
   const checkImage = (url) => new Promise(resolve => {
@@ -1183,7 +1301,7 @@ export async function addMonsterToScene(monster) {
 
       // Use item image if available, otherwise try type-specific, otherwise default
        // Check localStorage for custom item images too
-       let imageUrl = localStorage.getItem(`item_image_${itemData.name}`) || itemData.image;
+       let imageUrl = getStoredImage('item', itemData.name) || itemData.image;
        
        // Detect 404 placeholder (Base64 for "Not Found" is Tm90IEZvdW5k)
        const isPlaceholder = imageUrl && imageUrl.startsWith('data:') && imageUrl.includes('Tm90IEZvdW5k');
@@ -2346,7 +2464,7 @@ export function searchItems(query) {
               // We only save it in the object if it's NOT a huge data URI, to prevent bloating the main list
               image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
           };
-          saveCustomMonster(newMonster);
+          if (!saveCustomMonster(newMonster)) return;
 
           // Sync Library -> Tokens: Update existing OBR tokens for this monster
           try {
@@ -2395,7 +2513,7 @@ export function searchItems(query) {
               source: editorOriginalSource || "Custom",
               aoe: (aoeType && aoeSize) ? { type: aoeType, size: aoeSize } : undefined
           };
-          saveCustomSpell(newSpell);
+          if (!saveCustomSpell(newSpell)) return;
       } else {
           const newItem = {
               name: name,
@@ -2405,7 +2523,7 @@ export function searchItems(query) {
               source: editorOriginalSource || "Custom",
               image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
           };
-          saveCustomItem(newItem);
+          if (!saveCustomItem(newItem)) return;
       }
       
       // Handle Rename of Custom Item (Cleanup old)
@@ -2523,7 +2641,7 @@ export function searchItems(query) {
                   const data = JSON.parse(event.target.result);
                   let count = 0;
                   Object.keys(data).forEach(key => {
-                      if (key.startsWith('dnd_extension_') || key.startsWith('monster_image_') || key.startsWith('item_image_')) {
+                      if (key.startsWith('dnd_extension_') || key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) {
                           localStorage.setItem(key, data[key]);
                           count++;
                       }
