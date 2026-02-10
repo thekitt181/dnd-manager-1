@@ -115,7 +115,12 @@ app.post('/api/upload-image', async (req, res) => {
             return res.status(400).json({ error: 'Invalid base64 string' });
         }
 
-        const ext = matches[1];
+        let ext = matches[1];
+        // Fix for svg+xml mime type -> .svg extension
+        if (ext === 'svg+xml') {
+            ext = 'svg';
+        }
+        
         const data = matches[2];
         const buffer = Buffer.from(data, 'base64');
         

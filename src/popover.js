@@ -1137,7 +1137,7 @@ export async function addMonsterToScene(monster) {
       mimeType = 'image/webp';
   } else if (imageUrl.match(/\.gif$/i)) {
       mimeType = 'image/gif';
-  } else if (imageUrl.match(/\.svg$/i)) {
+  } else if (imageUrl.match(/\.svg(\+xml)?$/i)) {
       mimeType = 'image/svg+xml';
   }
   
