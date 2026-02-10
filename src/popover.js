@@ -911,9 +911,10 @@ async function ensureShortImageUrl(url) {
         return null;
     }
 
-    // Remove whitespace from ALL URLs (newlines/spaces can break fetch/OBR)
-    // Especially critical for Data URIs
-    url = url.replace(/\s/g, '');
+    // Remove whitespace from Data URIs (newlines/spaces can break fetch/OBR)
+    if (url.startsWith('data:')) {
+        url = url.replace(/\s/g, '');
+    }
 
     // Attempt to compress if it's a large Data URI (> 500KB)
     if (url.startsWith('data:image') && url.length > 500000) {
@@ -2128,6 +2129,11 @@ export function searchItems(query) {
         <div style="display: flex; flex-direction: column; gap: 8px;">
             <input id="editor-name" placeholder="Name" style="padding: 5px; width: 100%; box-sizing: border-box;">
             <input id="editor-image-url" placeholder="Image URL (optional)" style="padding: 5px; width: 100%; box-sizing: border-box;">
+            <div id="editor-image-preview-container" style="display: none; margin-top: 5px; align-items: center; gap: 10px;">
+                <img id="editor-image-preview" style="width: 50px; height: 50px; object-fit: contain; border: 1px solid #555; background: #333;" />
+                <span id="editor-image-status" style="font-size: 0.8em; color: #aaa;"></span>
+                <button id="editor-clear-image-btn" style="padding: 2px 5px; cursor: pointer; background: #555; border: 1px solid #777; color: white; font-size: 0.8em;">Clear</button>
+            </div>
             
             <!-- Monster Specific -->
             <div id="editor-monster-fields" style="display: none; flex-direction: column; gap: 8px;">
@@ -2206,6 +2212,10 @@ export function searchItems(query) {
   const editorSaveBtn = document.getElementById('editor-save-btn');
   const editorName = document.getElementById('editor-name');
   const editorImageUrl = document.getElementById('editor-image-url');
+  const editorImagePreviewContainer = document.getElementById('editor-image-preview-container');
+  const editorImagePreview = document.getElementById('editor-image-preview');
+  const editorImageStatus = document.getElementById('editor-image-status');
+  const editorClearImageBtn = document.getElementById('editor-clear-image-btn');
   const editorMonsterFields = document.getElementById('editor-monster-fields');
   const editorItemFields = document.getElementById('editor-item-fields');
   const editorSpellFields = document.getElementById('editor-spell-fields');
@@ -2294,6 +2304,15 @@ export function searchItems(query) {
       const existingImg = localStorage.getItem(imgKey);
       editorImageUrl.value = existingImg || '';
 
+      // Update Preview
+      if (existingImg) {
+          editorImagePreview.src = existingImg;
+          editorImagePreviewContainer.style.display = 'flex';
+          editorImageStatus.innerText = 'Stored Image';
+      } else {
+          editorImagePreviewContainer.style.display = 'none';
+      }
+
       if (mode === 'monster') {
           editorMonsterFields.style.display = 'flex';
           editorItemFields.style.display = 'none';
@@ -2367,6 +2386,23 @@ export function searchItems(query) {
       });
   }
 
+  // Image Preview Logic
+  editorImageUrl.addEventListener('input', () => {
+      const url = editorImageUrl.value.trim();
+      if (url) {
+          editorImagePreview.src = url;
+          editorImagePreviewContainer.style.display = 'flex';
+          editorImageStatus.innerText = 'Preview';
+      } else {
+          editorImagePreviewContainer.style.display = 'none';
+      }
+  });
+
+  editorClearImageBtn.addEventListener('click', () => {
+      editorImageUrl.value = '';
+      editorImagePreviewContainer.style.display = 'none';
+  });
+
   editorCancelBtn.addEventListener('click', () => {
       editorView.style.display = 'none';
       searchView.style.display = 'flex';
@@ -2418,10 +2454,15 @@ export function searchItems(query) {
 
           try {
               localStorage.setItem(imgKey, newImgUrl);
+              // Verify immediately
+              const saved = localStorage.getItem(imgKey);
+              if (!saved || saved !== newImgUrl) {
+                 throw new Error("Verification failed: Saved value does not match.");
+              }
               imageSaved = true;
           } catch (e) {
-              console.error("Storage limit reached, could not save image:", e);
-              alert("Warning: Local storage is full. The image could not be saved locally. Please enable the local server (npm start) to handle large images, or clear some space.");
+              console.error("Storage limit reached or save failed:", e);
+              alert("Warning: Local storage is full or corrupted. The image could not be saved locally. Please enable the local server (npm start) to handle large images, or clear some space.");
           }
       } else {
           // If the URL is cleared, remove the image from storage
