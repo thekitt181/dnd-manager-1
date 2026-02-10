@@ -980,12 +980,12 @@ function getPlaceholderImage(name, type = 'monster') {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <radialGradient id="grad1" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-      <stop offset="0%" style="stop-color:\${color1};stop-opacity:1" />
-      <stop offset="100%" style="stop-color:\${color2};stop-opacity:1" />
+      <stop offset="0%" style="stop-color:${color1};stop-opacity:1" />
+      <stop offset="100%" style="stop-color:${color2};stop-opacity:1" />
     </radialGradient>
   </defs>
   <circle cx="256" cy="256" r="250" fill="url(#grad1)" />
-  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="250" fill="white" font-family="Arial">\${letter}</text>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="250" fill="white" font-family="Arial">${letter}</text>
 </svg>`;
     return "data:image/svg+xml;base64," + btoa(svg);
 }

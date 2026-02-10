@@ -110,7 +110,7 @@ app.post('/api/upload-image', async (req, res) => {
         }
 
         // Extract base64 data
-        const matches = image.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
+        const matches = image.match(/^data:image\/([a-zA-Z0-9+\.-]+);base64,(.+)$/);
         if (!matches || matches.length !== 3) {
             return res.status(400).json({ error: 'Invalid base64 string' });
         }
