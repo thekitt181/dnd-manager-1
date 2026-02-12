@@ -658,9 +658,16 @@ async function syncWithBackend() {
             }
         }
         
-        if (changed) console.log('Synced with backend');
+        if (changed) {
+            console.log('Synced with backend');
+            // Force re-render if we are in the search view
+            if (document.getElementById('search-view').style.display !== 'none') {
+                const query = document.getElementById('search-input').value;
+                renderResults(query);
+            }
+        }
     } catch (e) {
-        // Silent fail for static hosting
+        console.warn("Backend sync failed (ignore if offline/static):", e);
     }
 }
 
@@ -2141,6 +2148,7 @@ export function searchItems(query) {
         
         <div style="margin-top: 5px; border-top: 1px solid #eee; padding-top: 5px; display: flex; justify-content: space-between; align-items: center;">
             <button id="backup-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Backup Data</button>
+            <button id="sync-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;" title="Force sync with online database">Force Sync</button>
             <span style="font-size: 0.8em; color: #888;">v1.3.0</span>
             <button id="restore-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Restore Data</button>
             <button id="export-source-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #007bff; color: #007bff; border-radius: 3px; padding: 5px 8px;" title="Download JSON files to update source code for hosting">Export Source</button>
@@ -2663,8 +2671,25 @@ export function searchItems(query) {
 
   // Backup / Restore Logic
   const backupBtn = document.getElementById('backup-btn');
+  const syncBtn = document.getElementById('sync-btn');
   const restoreBtn = document.getElementById('restore-btn');
   const restoreInput = document.getElementById('restore-file-input');
+
+  if (syncBtn) {
+      syncBtn.addEventListener('click', async () => {
+          syncBtn.innerText = "Syncing...";
+          syncBtn.disabled = true;
+          try {
+              await syncWithBackend();
+              alert("Sync completed! If new data was found, the list has been updated.");
+          } catch (e) {
+              alert("Sync failed: " + e.message);
+          } finally {
+              syncBtn.innerText = "Force Sync";
+              syncBtn.disabled = false;
+          }
+      });
+  }
 
   if (backupBtn) {
       backupBtn.addEventListener('click', () => {
@@ -3911,7 +3936,7 @@ export function searchItems(query) {
         const saveAndApply = async (imgSrc, isRetry = false) => {
              try {
                  // Check if it still looks like JSON (invalid URL)
-                 if (imgSrc.startsWith('{') || imgSrc.includes('"items":')) {
+                 if (imgSrc.trim().startsWith('{') || imgSrc.includes('"items":')) {
                       throw new Error("Invalid image URL. It looks like you pasted a raw JSON object. Please try extracting just the URL or use 'Select from Library'.");
                  }
 
