@@ -3821,6 +3821,7 @@ export function searchItems(query) {
         if (localStorage.getItem(key)) {
             if (confirm(`Reset custom image for "${entryName}"? This will revert to the default image.`)) {
                 localStorage.removeItem(key);
+                saveToBackend(); // Sync delete to backend
                 alert(`Custom image for "${entryName}" removed.`);
                 // Ideally reload the view, but for now just alert.
             }
@@ -3843,6 +3844,7 @@ export function searchItems(query) {
                 localStorage.removeItem(k);
                 count++;
             });
+            saveToBackend(); // Sync full clear to backend
             alert(`Cleared ${count} saved images.`);
         }
     });
@@ -3945,6 +3947,7 @@ export function searchItems(query) {
 
                  try {
                     localStorage.setItem(`monster_image_${monsterName}`, imgSrc);
+                    saveToBackend(); // Sync to backend immediately
                  } catch (storageError) {
                     console.warn("Failed to save image to localStorage (Quota Exceeded?):", storageError);
                  }
