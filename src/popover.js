@@ -4241,6 +4241,7 @@ export function searchItems(query) {
                         // 3. Save this image association for future adds of this monster
                         const safeUrl = await ensureShortImageUrl(selectedItem.image.url);
                         localStorage.setItem(`monster_image_${monster.name}`, safeUrl);
+                        saveToBackend(); // Sync to backend immediately
 
                         // 4. Update the item
                         await OBR.scene.items.updateItems([selectedItem.id], (items) => {
