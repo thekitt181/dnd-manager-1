@@ -661,9 +661,12 @@ async function syncWithBackend() {
         if (changed) {
             console.log('Synced with backend');
             // Force re-render if we are in the search view
-            if (document.getElementById('search-view').style.display !== 'none') {
-                const query = document.getElementById('search-input').value;
-                renderResults(query);
+            const searchView = document.getElementById('search-view');
+            if (searchView && searchView.style.display !== 'none') {
+                const searchInput = document.getElementById('search-input');
+                if (searchInput) {
+                    renderResults(searchInput.value);
+                }
             }
         }
     } catch (e) {
