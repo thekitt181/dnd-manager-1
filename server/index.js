@@ -88,13 +88,13 @@ app.get('/api/data', async (req, res) => {
 
 app.post('/api/data', async (req, res) => {
     try {
-        const { monsters, items, deleted, images } = req.body;
+        const { monsters, items, deleted, images, imagesData } = req.body;
         // Validate basic structure
         if (!Array.isArray(monsters) || !Array.isArray(items)) {
             return res.status(400).json({ error: 'Invalid data format' });
         }
         
-        await saveData({ monsters, items, deleted: deleted || [], images: images || {}, lastUpdated: new Date() });
+        await saveData({ monsters, items, deleted: deleted || [], images: images || {}, imagesData: imagesData || {}, lastUpdated: new Date() });
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -200,6 +200,68 @@ app.get('/api/proxy', (req, res) => {
         
     } catch (e) {
         res.status(400).json({ error: 'Invalid URL', details: e.message });
+    }
+});
+
+// Serve persisted images from DB or fallback
+app.get('/api/static-image', async (req, res) => {
+    try {
+        const key = req.query.key;
+        if (!key) return res.status(400).json({ error: 'Missing key parameter' });
+        const data = await getData();
+        const pathOrUrl = data.images ? data.images[key] : null;
+        const rawData = data.imagesData ? data.imagesData[key] : null;
+        
+        // 1) If we have a file path under dist, serve that
+        if (pathOrUrl && pathOrUrl.startsWith('/images/')) {
+            const filePath = path.join(distPath, pathOrUrl.replace(/^\//, ''));
+            if (fs.existsSync(filePath)) {
+                return res.sendFile(filePath);
+            }
+        }
+        
+        // 2) If we have raw Data URI, decode and serve
+        if (rawData && rawData.startsWith('data:image')) {
+            const matches = rawData.match(/^data:image\/([a-zA-Z0-9+\.-]+);base64,(.+)$/);
+            if (!matches || matches.length !== 3) {
+                return res.status(400).json({ error: 'Invalid stored image data' });
+            }
+            let ext = matches[1];
+            if (ext === 'svg+xml') ext = 'svg';
+            const base64 = matches[2];
+            const buffer = Buffer.from(base64, 'base64');
+            res.setHeader('Content-Type', `image/${ext}`);
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            return res.end(buffer);
+        }
+        
+        // 3) If we have a full external URL, proxy it
+        if (pathOrUrl && /^https?:\/\//.test(pathOrUrl)) {
+            try {
+                const targetUrl = new URL(pathOrUrl);
+                const protocol = targetUrl.protocol === 'https:' ? https : http;
+                protocol.get(pathOrUrl, (proxyRes) => {
+                    res.status(proxyRes.statusCode);
+                    if (proxyRes.headers['content-type']) {
+                        res.setHeader('Content-Type', proxyRes.headers['content-type']);
+                    }
+                    res.setHeader('Access-Control-Allow-Origin', '*');
+                    proxyRes.pipe(res);
+                }).on('error', (e) => {
+                    console.error('Static-image proxy error:', e);
+                    res.status(500).json({ error: 'Proxy failed' });
+                });
+                return;
+            } catch (e) {
+                // fall through
+            }
+        }
+        
+        return res.status(404).json({ error: 'Image not found' });
+    } catch (e) {
+        console.error('static-image error:', e);
+        return res.status(500).json({ error: e.message });
     }
 });
 

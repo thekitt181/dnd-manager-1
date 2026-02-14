@@ -683,17 +683,22 @@ async function saveToBackend() {
         
         // Collect images from localStorage
         const images = {};
+        const imagesData = {};
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_'))) {
                 images[key] = localStorage.getItem(key);
+            }
+            // Backup raw data for persistence
+            if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && key.endsWith('_data')) {
+                imagesData[key.replace('_data', '')] = localStorage.getItem(key);
             }
         }
 
         await fetch(`${API_BASE}/data`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ monsters, items, spells, deleted, images })
+            body: JSON.stringify({ monsters, items, spells, deleted, images, imagesData })
         });
     } catch (e) {
         // Silent fail
@@ -942,41 +947,21 @@ async function ensureShortImageUrl(url, name = null, folder = null) {
         }
     }
 
-    // OBR limit is 2048. We give some buffer.
-    // OR if we explicitly provided a name/folder, we likely WANT to save it permanently, even if it's short.
-    // But let's stick to "if it's a Data URI" or "Too Long" to avoid unnecessary uploads of external URLs.
-    // Actually, if the user wants "perma replace", they might want to download an external URL to local too?
-    // For now, let's trigger upload if it's a Data URI (which is what usually happens with pastes/uploads)
+    // If it's a Data URI, persist the raw data locally and use a stable, short server URL.
+    // This avoids relying on ephemeral filesystem storage on hosts that restart.
     if (url.startsWith('data:image')) {
-        console.log("Uploading image to local server (Persistence requested)...");
+        // Determine storage key based on folder/name
+        const prefix = folder === 'items' ? 'item_image_' : (folder === 'spells' ? 'spell_image_' : 'monster_image_');
+        const key = `${prefix}${name}`;
         try {
-            const response = await fetch('/api/upload-image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: url, filename: name, folder: folder })
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                if (data.url) {
-                    // Convert relative URL to absolute and add cache buster
-                    const absoluteUrl = new URL(data.url, window.location.href).href + `?t=${Date.now()}`;
-                    console.log("Image uploaded successfully. New URL:", absoluteUrl);
-                    return absoluteUrl;
-                }
-            } else {
-                console.warn("Upload failed with status:", response.status);
-                // Only alert if we really needed this (i.e. it was too long)
-                if (url.length > 2000) {
-                     alert(`Image upload failed (Status: ${response.status}). Ensure the backend server is running (npm start).`);
-                }
-            }
+            localStorage.setItem(`${key}_data`, url);
         } catch (e) {
-            console.warn("Could not upload image to local server (is it running?):", e);
-            if (url.length > 2000) {
-                alert("Could not upload image to local server. Make sure 'npm start' is running in a separate terminal.");
-            }
+            console.warn("Failed to store image data locally:", e);
         }
+        // Return a short, stable URL that the server will serve from DB
+        const staticUrl = `/api/static-image?key=${encodeURIComponent(key)}`;
+        const absoluteUrl = new URL(staticUrl, window.location.href).href;
+        return absoluteUrl;
     }
     return url;
 }
