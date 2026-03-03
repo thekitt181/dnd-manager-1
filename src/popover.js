@@ -2290,21 +2290,24 @@ export function searchItems(query) {
           if (extensionItems.length > 0) {
               await OBR.scene.items.updateItems(extensionItems.map(i => i.id), (items) => {
                   for (let item of items) {
-                       const isMonster = item.metadata.created_by === 'dnd_extension';
-                       
-                       // Try to get name from metadata, fallback to label only if it doesn't look like stats
-                       let name = item.metadata.name;
-                       if (!name && item.text && item.text.plainText) {
-                           const firstLine = item.text.plainText.split('\n')[0];
-                           if (!firstLine.startsWith('HP:') && !firstLine.startsWith('AC:')) {
-                               name = firstLine;
-                           }
-                       }
-                       if (!name) name = "Unknown";
+                      const isMonster = item.metadata.created_by === 'dnd_extension';
+                      let name = item.metadata.name;
 
-                       const hp = item.metadata.hp;
-                       const ac = item.metadata.ac;
-                       const type = item.metadata.type;
+                      // One-time migration for older tokens missing the name in metadata
+                      if (isMonster && !name && item.text && item.text.plainText) {
+                          const firstLine = item.text.plainText.split('\n')[0];
+                          // If the first line isn't a stat, assume it's the name
+                          if (!firstLine.startsWith('HP:') && !firstLine.startsWith('AC:')) {
+                              name = firstLine;
+                              // Persist this back to the metadata! This is the crucial fix.
+                              item.metadata.name = name; 
+                          }
+                      }
+                      if (!name) name = "Unknown"; // Fallback
+
+                      const hp = item.metadata.hp;
+                      const ac = item.metadata.ac;
+                      const type = item.metadata.type;
 
                       let newLabel = "";
                       if (!hName) newLabel += name;
