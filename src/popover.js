@@ -1211,6 +1211,23 @@ export async function addMonsterToScene(monster) {
                         }
                     }
                    
+                   const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+                   const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+                   const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+
+                   let label = "";
+                   if (!hideName) label += monster.name;
+                   
+                   let statsLine = "";
+                   if (!hideHP) statsLine += `HP: ${hpValue}`;
+                   if (!hideHP && !hideAC) statsLine += " ";
+                   if (!hideAC) statsLine += `AC: ${acValue}`;
+                   
+                   if (statsLine) {
+                       if (label) label += "\n";
+                       label += statsLine;
+                   }
+
                    const item = buildImage(
                      {
                          url: imageUrl,
@@ -1221,7 +1238,7 @@ export async function addMonsterToScene(monster) {
                    )
                      .position(pos)
                      .scale({ x: 1, y: 1 })
-                     .plainText(`${monster.name}\nHP: ${hpValue} AC: ${acValue}`)
+                     .plainText(label)
                      .metadata({
                          hp: hpValue,
                          ac: acValue,
@@ -1431,6 +1448,16 @@ export async function addMonsterToScene(monster) {
       await new Promise((resolve, reject) => {
            OBR.onReady(() => {
                try {
+                   const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+                   let label = "";
+                   if (!hideName) label += itemData.name;
+                   if (itemData.type) {
+                       if (label) label += "\n";
+                       label += itemData.type;
+                   } else if (!label) {
+                       label = "Item";
+                   }
+
                    const item = buildImage(
                      {
                          url: imageUrl,
@@ -1441,7 +1468,7 @@ export async function addMonsterToScene(monster) {
                    )
                      .position({ x: 0, y: 0 })
                      .scale({ x: 1, y: 1 })
-                     .plainText(`${itemData.name}\n${itemData.type || 'Item'}`)
+                     .plainText(label)
                      .metadata({
                          name: itemData.name,
                          type: itemData.type,
@@ -2105,6 +2132,18 @@ export function searchItems(query) {
             <button id="create-btn" style="padding: 0 10px; font-weight: bold; font-size: 1.2em; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px;" title="Create Custom Entry">+</button>
         </div>
         
+        <div id="global-settings" style="margin-bottom: 5px; display: flex; gap: 10px; flex-wrap: wrap; padding: 5px; background: #eee; border-radius: 4px;">
+            <label style="font-size: 0.8em; cursor: pointer; color: #333; font-weight: bold;">
+                <input type="checkbox" id="hide-name-checkbox"> Hide Name
+            </label>
+            <label style="font-size: 0.8em; cursor: pointer; color: #333; font-weight: bold;">
+                <input type="checkbox" id="hide-hp-checkbox"> Hide HP
+            </label>
+            <label style="font-size: 0.8em; cursor: pointer; color: #333; font-weight: bold;">
+                <input type="checkbox" id="hide-ac-checkbox"> Hide AC
+            </label>
+        </div>
+
         <div id="monster-filters" style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px;">
           <label style="font-size: 0.9em; cursor: pointer;">
               <input type="checkbox" id="search-name-only"> Search Name Only
@@ -2216,6 +2255,7 @@ export function searchItems(query) {
   const tabItems = document.getElementById('tab-items');
   const tabSpells = document.getElementById('tab-spells');
   const monsterFilters = document.getElementById('monster-filters');
+  const globalSettings = document.getElementById('global-settings');
   const spellTools = document.getElementById('spell-tools');
   const quickAoeBtn = document.getElementById('quick-aoe-btn');
   const quickAoeShape = document.getElementById('quick-aoe-shape');
@@ -2223,6 +2263,19 @@ export function searchItems(query) {
   
   const input = document.getElementById('search-input');
   const searchNameOnlyCheckbox = document.getElementById('search-name-only');
+  const hideNameCheckbox = document.getElementById('hide-name-checkbox');
+  const hideHpCheckbox = document.getElementById('hide-hp-checkbox');
+  const hideAcCheckbox = document.getElementById('hide-ac-checkbox');
+
+  // Load hide settings
+  hideNameCheckbox.checked = localStorage.getItem('dnd_extension_hide_name') === 'true';
+  hideHpCheckbox.checked = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+  hideAcCheckbox.checked = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+
+  hideNameCheckbox.addEventListener('change', () => localStorage.setItem('dnd_extension_hide_name', hideNameCheckbox.checked));
+  hideHpCheckbox.addEventListener('change', () => localStorage.setItem('dnd_extension_hide_hp', hideHpCheckbox.checked));
+  hideAcCheckbox.addEventListener('change', () => localStorage.setItem('dnd_extension_hide_ac', hideAcCheckbox.checked));
+
   const minCrInput = document.getElementById('min-cr-input');
   const maxCrInput = document.getElementById('max-cr-input');
   const resultsDiv = document.getElementById('results');
@@ -2540,8 +2593,24 @@ export function searchItems(query) {
                               item.metadata.name = newMonster.name; // Ensure name is in metadata for future sync
                               
                               // Update Text Label
-                              // Usually "Name\nHP: X AC: Y"
-                              item.text.plainText = `${newMonster.name}\nHP: ${newMonster.hp} AC: ${newMonster.ac}`;
+                              // Respect hide settings
+                              const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+                              const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+                              const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+
+                              let newLabel = "";
+                              if (!hideName) newLabel += newMonster.name;
+                              
+                              let statsLine = "";
+                              if (!hideHP) statsLine += `HP: ${newMonster.hp}`;
+                              if (!hideHP && !hideAC) statsLine += " ";
+                              if (!hideAC) statsLine += `AC: ${newMonster.ac}`;
+                              
+                              if (statsLine) {
+                                  if (newLabel) newLabel += "\n";
+                                  newLabel += statsLine;
+                              }
+                              item.text.plainText = newLabel;
                               
                               // Update Image if changed
                               if (newImgUrl && item.image) {
@@ -2908,6 +2977,7 @@ export function searchItems(query) {
       tabSpells.style.fontWeight = 'normal';
       
       monsterFilters.style.display = 'none';
+      if (globalSettings) globalSettings.style.display = 'none';
       spellTools.style.display = 'none';
       if (randomBtn) randomBtn.style.display = 'none';
 
@@ -2915,10 +2985,12 @@ export function searchItems(query) {
           tabMonsters.style.background = '#ddd';
           tabMonsters.style.fontWeight = 'bold';
           monsterFilters.style.display = 'flex';
+          if (globalSettings) globalSettings.style.display = 'flex';
           input.placeholder = "Search monsters (e.g. Goblin)...";
       } else if (tab === 'items') {
           tabItems.style.background = '#ddd';
           tabItems.style.fontWeight = 'bold';
+          if (globalSettings) globalSettings.style.display = 'flex';
           if (randomBtn) randomBtn.style.display = 'block';
           input.placeholder = "Search items (e.g. Sword)...";
       } else if (tab === 'spells') {
@@ -4077,8 +4149,27 @@ export function searchItems(query) {
                         for (let item of items) {
                             item.metadata.hp = newHp;
                             item.metadata.ac = newAc;
-                            const name = item.text.plainText.split('\n')[0];
-                            item.text.plainText = `${name}\nHP: ${newHp} AC: ${newAc}`;
+                            
+                            // Respect hide settings
+                            const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+                            const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+                            const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+
+                            const name = item.metadata.name || item.text.plainText.split('\n')[0];
+                            
+                            let newLabel = "";
+                            if (!hideName) newLabel += name;
+                            
+                            let statsLine = "";
+                            if (!hideHP) statsLine += `HP: ${newHp}`;
+                            if (!hideHP && !hideAC) statsLine += " ";
+                            if (!hideAC) statsLine += `AC: ${newAc}`;
+                            
+                            if (statsLine) {
+                                if (newLabel) newLabel += "\n";
+                                newLabel += statsLine;
+                            }
+                            item.text.plainText = newLabel;
                         }
                     });
 
@@ -4261,7 +4352,25 @@ export function searchItems(query) {
                                         style: {}
                                     };
                                 }
-                                item.text.plainText = `${monster.name}\nHP: ${hpVal} AC: ${acVal}`;
+                                
+                                // Respect hide settings
+                                const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+                                const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+                                const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+
+                                let newLabel = "";
+                                if (!hideName) newLabel += monster.name;
+                                
+                                let statsLine = "";
+                                if (!hideHP) statsLine += `HP: ${hpVal}`;
+                                if (!hideHP && !hideAC) statsLine += " ";
+                                if (!hideAC) statsLine += `AC: ${acVal}`;
+                                
+                                if (statsLine) {
+                                    if (newLabel) newLabel += "\n";
+                                    newLabel += statsLine;
+                                }
+                                item.text.plainText = newLabel;
                                 // Note: item.text.visible is not a valid property on IMAGE items
                                 
                                 if (!item.text.style) item.text.style = {};
