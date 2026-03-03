@@ -4310,26 +4310,42 @@ export function searchItems(query) {
 
         if (hpResetBtn) {
             hpResetBtn.addEventListener('click', async () => {
-                // Find original monster to get default HP
-                const original = monsters.find(m => m.name === data.name) || 
-                                 getCustomMonsters().find(m => m.name === data.name);
-                if (original) {
-                    const defaultHp = parseStat(original.hp);
-                    hpInput.value = defaultHp;
-                    await updateTokenStats(defaultHp, parseInt(acInput.value, 10));
+                try {
+                    const items = await OBR.scene.items.getItems([itemId]);
+                    if (items.length > 0) {
+                        const currentItem = items[0];
+                        const monsterName = currentItem.metadata.name;
+                        const original = monsters.find(m => m.name === monsterName) || 
+                                         getCustomMonsters().find(m => m.name === monsterName);
+                        if (original) {
+                            const defaultHp = parseStat(original.hp);
+                            hpInput.value = defaultHp;
+                            await updateTokenStats(defaultHp, parseInt(acInput.value, 10));
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to reset HP", e);
                 }
             });
         }
 
         if (acResetBtn) {
             acResetBtn.addEventListener('click', async () => {
-                // Find original monster to get default AC
-                const original = monsters.find(m => m.name === data.name) || 
-                                 getCustomMonsters().find(m => m.name === data.name);
-                if (original) {
-                    const defaultAc = parseStat(original.ac);
-                    acInput.value = defaultAc;
-                    await updateTokenStats(parseInt(hpInput.value, 10), defaultAc);
+                try {
+                    const items = await OBR.scene.items.getItems([itemId]);
+                    if (items.length > 0) {
+                        const currentItem = items[0];
+                        const monsterName = currentItem.metadata.name;
+                        const original = monsters.find(m => m.name === monsterName) || 
+                                         getCustomMonsters().find(m => m.name === monsterName);
+                        if (original) {
+                            const defaultAc = parseStat(original.ac);
+                            acInput.value = defaultAc;
+                            await updateTokenStats(parseInt(hpInput.value, 10), defaultAc);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to reset AC", e);
                 }
             });
         }
