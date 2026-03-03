@@ -2272,9 +2272,74 @@ export function searchItems(query) {
   hideHpCheckbox.checked = localStorage.getItem('dnd_extension_hide_hp') === 'true';
   hideAcCheckbox.checked = localStorage.getItem('dnd_extension_hide_ac') === 'true';
 
-  hideNameCheckbox.addEventListener('change', () => localStorage.setItem('dnd_extension_hide_name', hideNameCheckbox.checked));
-  hideHpCheckbox.addEventListener('change', () => localStorage.setItem('dnd_extension_hide_hp', hideHpCheckbox.checked));
-  hideAcCheckbox.addEventListener('change', () => localStorage.setItem('dnd_extension_hide_ac', hideAcCheckbox.checked));
+  const updateAllTokensOnMap = async () => {
+      const hName = hideNameCheckbox.checked;
+      const hHP = hideHpCheckbox.checked;
+      const hAC = hideAcCheckbox.checked;
+
+      try {
+          const items = await OBR.scene.items.getItems();
+          const extensionItems = items.filter(item => 
+              item.metadata && (
+                  item.metadata.created_by === 'dnd_extension' || 
+                  item.metadata.created_by === 'dnd_extension_item'
+              )
+          );
+
+          if (extensionItems.length > 0) {
+              await OBR.scene.items.updateItems(extensionItems.map(i => i.id), (items) => {
+                  for (let item of items) {
+                      const isMonster = item.metadata.created_by === 'dnd_extension';
+                      const name = item.metadata.name || (item.text && item.text.plainText ? item.text.plainText.split('\n')[0] : "Unknown");
+                      const hp = item.metadata.hp;
+                      const ac = item.metadata.ac;
+                      const type = item.metadata.type;
+
+                      let newLabel = "";
+                      if (!hName) newLabel += name;
+                      
+                      if (isMonster) {
+                          let statsLine = "";
+                          if (!hHP && hp !== undefined) statsLine += `HP: ${hp}`;
+                          if (!hHP && !hAC && hp !== undefined && ac !== undefined) statsLine += " ";
+                          if (!hAC && ac !== undefined) statsLine += `AC: ${ac}`;
+                          
+                          if (statsLine) {
+                              if (newLabel) newLabel += "\n";
+                              newLabel += statsLine;
+                          }
+                      } else {
+                          // Item label logic
+                          if (type) {
+                              if (newLabel) newLabel += "\n";
+                              newLabel += type;
+                          } else if (!newLabel) {
+                              newLabel = "Item";
+                          }
+                      }
+                      
+                      if (!item.text) item.text = { plainText: "" };
+                      item.text.plainText = newLabel;
+                  }
+              });
+          }
+      } catch (e) {
+          console.error("Failed to update tokens on map:", e);
+      }
+  };
+
+  hideNameCheckbox.addEventListener('change', () => {
+      localStorage.setItem('dnd_extension_hide_name', hideNameCheckbox.checked);
+      updateAllTokensOnMap();
+  });
+  hideHpCheckbox.addEventListener('change', () => {
+      localStorage.setItem('dnd_extension_hide_hp', hideHpCheckbox.checked);
+      updateAllTokensOnMap();
+  });
+  hideAcCheckbox.addEventListener('change', () => {
+      localStorage.setItem('dnd_extension_hide_ac', hideAcCheckbox.checked);
+      updateAllTokensOnMap();
+  });
 
   const minCrInput = document.getElementById('min-cr-input');
   const maxCrInput = document.getElementById('max-cr-input');
@@ -3120,18 +3185,26 @@ export function searchItems(query) {
         `;
     } else {
         statsInputs = itemId 
-            ? `<div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 5px;">
-                 <div style="display: flex; align-items: center; gap: 5px;">
-                   <strong>HP:</strong> 
-                   <input type="number" id="hp-input" value="${data.hp}" style="width: 60px;">
+            ? `<div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 5px; padding: 8px; background: #f5f5f5; border-radius: 6px; color: #333;">
+                 <div style="display: flex; align-items: center; gap: 8px;">
+                   <strong style="width: 30px;">HP:</strong> 
+                   <button id="hp-minus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">-</button>
+                   <input type="number" id="hp-input" value="${data.hp}" style="width: 50px; text-align: center; border: 1px solid #ccc; border-radius: 3px;">
+                   <button id="hp-plus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">+</button>
                  </div>
-                 <div style="display: flex; align-items: center; gap: 5px;">
-                   <strong>AC:</strong> 
-                   <input type="number" id="ac-input" value="${data.ac}" style="width: 60px;">
+                 <div style="display: flex; align-items: center; gap: 8px;">
+                   <strong style="width: 30px;">AC:</strong> 
+                   <button id="ac-minus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">-</button>
+                   <input type="number" id="ac-input" value="${data.ac}" style="width: 50px; text-align: center; border: 1px solid #ccc; border-radius: 3px;">
+                   <button id="ac-plus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">+</button>
                  </div>
-                 <button id="update-stats-btn" data-id="${itemId}" style="margin-top: 5px;">Update Stats</button>
-                 <button id="share-description-btn" style="width: 100%; margin-top: 5px; background-color: #FF9800; color: white; border: none; padding: 5px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
-                 <button id="add-to-scene-btn" style="width: 100%; margin-top: 5px; background-color: #4CAF50; color: white; border: none; padding: 5px; border-radius: 4px; cursor: pointer;">Add Another to Scene</button>
+                 <div style="display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 0.85em;">
+                   <span>Adjustment Amount:</span>
+                   <input type="number" id="stat-adjust-amount" value="1" style="width: 40px; border: 1px solid #ccc; border-radius: 3px; padding: 2px;">
+                 </div>
+                 <button id="update-stats-btn" data-id="${itemId}" style="margin-top: 5px; padding: 6px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Apply Changes</button>
+                 <button id="share-description-btn" style="width: 100%; margin-top: 5px; background-color: #FF9800; color: white; border: none; padding: 6px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
+                 <button id="add-to-scene-btn" style="width: 100%; margin-top: 5px; background-color: #4CAF50; color: white; border: none; padding: 6px; border-radius: 4px; cursor: pointer;">Add Another to Scene</button>
                </div>`
             : `<button id="edit-btn" style="width: 100%; margin-bottom: 5px; background-color: #2196F3; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Edit / Rename</button>
                <button id="add-to-scene-btn" style="width: 100%; margin-bottom: 5px; background-color: #4CAF50; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Add to Scene</button>
@@ -4139,62 +4212,83 @@ export function searchItems(query) {
         const btn = document.getElementById('update-stats-btn');
         const hpInput = document.getElementById('hp-input');
         const acInput = document.getElementById('ac-input');
+        const adjustAmountInput = document.getElementById('stat-adjust-amount');
         
+        const hpPlusBtn = document.getElementById('hp-plus-btn');
+        const hpMinusBtn = document.getElementById('hp-minus-btn');
+        const acPlusBtn = document.getElementById('ac-plus-btn');
+        const acMinusBtn = document.getElementById('ac-minus-btn');
+
+        const updateTokenStats = async (newHp, newAc) => {
+            try {
+                await OBR.scene.items.updateItems([itemId], (items) => {
+                    for (let item of items) {
+                        item.metadata.hp = newHp;
+                        item.metadata.ac = newAc;
+                        
+                        // Respect hide settings
+                        const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+                        const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+                        const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+
+                        const name = item.metadata.name || item.text.plainText.split('\n')[0];
+                        
+                        let newLabel = "";
+                        if (!hideName) newLabel += name;
+                        
+                        let statsLine = "";
+                        if (!hideHP) statsLine += `HP: ${newHp}`;
+                        if (!hideHP && !hideAC) statsLine += " ";
+                        if (!hideAC) statsLine += `AC: ${newAc}`;
+                        
+                        if (statsLine) {
+                            if (newLabel) newLabel += "\n";
+                            newLabel += statsLine;
+                        }
+                        item.text.plainText = newLabel;
+                    }
+                });
+
+                // Sync to Library (Permanent Change)
+                const updatedMonster = { 
+                    ...data, 
+                    hp: newHp, 
+                    ac: newAc,
+                    source: data.source || "Custom" 
+                };
+                
+                saveCustomMonster(updatedMonster);
+
+                if (btn) {
+                    const originalText = btn.innerText;
+                    btn.innerText = "Saved!";
+                    setTimeout(() => btn.innerText = originalText, 1000);
+                }
+            } catch (err) {
+                console.error("Failed to update token stats:", err);
+            }
+        };
+
+        const handleStatAdjustment = async (type, delta) => {
+            const amount = parseInt(adjustAmountInput.value, 10) || 1;
+            const input = type === 'hp' ? hpInput : acInput;
+            const newValue = parseInt(input.value, 10) + (delta * amount);
+            input.value = newValue;
+            
+            // Trigger update immediately
+            await updateTokenStats(parseInt(hpInput.value, 10), parseInt(acInput.value, 10));
+        };
+
+        if (hpPlusBtn) hpPlusBtn.addEventListener('click', () => handleStatAdjustment('hp', 1));
+        if (hpMinusBtn) hpMinusBtn.addEventListener('click', () => handleStatAdjustment('hp', -1));
+        if (acPlusBtn) acPlusBtn.addEventListener('click', () => handleStatAdjustment('ac', 1));
+        if (acMinusBtn) acMinusBtn.addEventListener('click', () => handleStatAdjustment('ac', -1));
+
         if (btn && hpInput && acInput) {
             btn.addEventListener('click', async () => {
                 const newHp = parseInt(hpInput.value, 10);
                 const newAc = parseInt(acInput.value, 10);
-                try {
-                    await OBR.scene.items.updateItems([itemId], (items) => {
-                        for (let item of items) {
-                            item.metadata.hp = newHp;
-                            item.metadata.ac = newAc;
-                            
-                            // Respect hide settings
-                            const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
-                            const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
-                            const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
-
-                            const name = item.metadata.name || item.text.plainText.split('\n')[0];
-                            
-                            let newLabel = "";
-                            if (!hideName) newLabel += name;
-                            
-                            let statsLine = "";
-                            if (!hideHP) statsLine += `HP: ${newHp}`;
-                            if (!hideHP && !hideAC) statsLine += " ";
-                            if (!hideAC) statsLine += `AC: ${newAc}`;
-                            
-                            if (statsLine) {
-                                if (newLabel) newLabel += "\n";
-                                newLabel += statsLine;
-                            }
-                            item.text.plainText = newLabel;
-                        }
-                    });
-
-                    // Sync to Library (Permanent Change)
-                    // We need to ensure we have the latest description/stats from the library data we loaded
-                    const updatedMonster = { 
-                        ...data, 
-                        hp: newHp, 
-                        ac: newAc,
-                        source: data.source || "Custom" // Ensure source is preserved or set to Custom
-                    };
-                    
-                    // If the monster was originally built-in, this will create a custom override
-                    saveCustomMonster(updatedMonster);
-                    
-                    // Optional: Visual feedback could be added here
-                    const btn = document.getElementById('update-stats-btn');
-                    const originalText = btn.innerText;
-                    btn.innerText = "Saved!";
-                    setTimeout(() => btn.innerText = originalText, 1000);
-
-                } catch (error) {
-                    console.error("Error updating stats:", error);
-                    alert("Failed to update stats");
-                }
+                await updateTokenStats(newHp, newAc);
             });
         }
     }
