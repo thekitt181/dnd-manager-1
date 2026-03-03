@@ -1240,6 +1240,7 @@ export async function addMonsterToScene(monster) {
                      .scale({ x: 1, y: 1 })
                      .plainText(label)
                      .metadata({
+                         name: monster.name,
                          hp: hpValue,
                          ac: acValue,
                          cr: String(monster.cr || "Unknown"),
@@ -2289,11 +2290,21 @@ export function searchItems(query) {
           if (extensionItems.length > 0) {
               await OBR.scene.items.updateItems(extensionItems.map(i => i.id), (items) => {
                   for (let item of items) {
-                      const isMonster = item.metadata.created_by === 'dnd_extension';
-                      const name = item.metadata.name || (item.text && item.text.plainText ? item.text.plainText.split('\n')[0] : "Unknown");
-                      const hp = item.metadata.hp;
-                      const ac = item.metadata.ac;
-                      const type = item.metadata.type;
+                       const isMonster = item.metadata.created_by === 'dnd_extension';
+                       
+                       // Try to get name from metadata, fallback to label only if it doesn't look like stats
+                       let name = item.metadata.name;
+                       if (!name && item.text && item.text.plainText) {
+                           const firstLine = item.text.plainText.split('\n')[0];
+                           if (!firstLine.startsWith('HP:') && !firstLine.startsWith('AC:')) {
+                               name = firstLine;
+                           }
+                       }
+                       if (!name) name = "Unknown";
+
+                       const hp = item.metadata.hp;
+                       const ac = item.metadata.ac;
+                       const type = item.metadata.type;
 
                       let newLabel = "";
                       if (!hName) newLabel += name;
@@ -3191,12 +3202,14 @@ export function searchItems(query) {
                    <button id="hp-minus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">-</button>
                    <input type="number" id="hp-input" value="${data.hp}" style="width: 50px; text-align: center; border: 1px solid #ccc; border-radius: 3px;">
                    <button id="hp-plus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">+</button>
+                   <button id="hp-reset-btn" style="padding: 2px 5px; cursor: pointer; background: #fff; border: 1px solid #ccc; border-radius: 3px; font-size: 0.8em;" title="Reset HP to default">↺</button>
                  </div>
                  <div style="display: flex; align-items: center; gap: 8px;">
                    <strong style="width: 30px;">AC:</strong> 
                    <button id="ac-minus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">-</button>
                    <input type="number" id="ac-input" value="${data.ac}" style="width: 50px; text-align: center; border: 1px solid #ccc; border-radius: 3px;">
                    <button id="ac-plus-btn" style="padding: 2px 8px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 3px;">+</button>
+                   <button id="ac-reset-btn" style="padding: 2px 5px; cursor: pointer; background: #fff; border: 1px solid #ccc; border-radius: 3px; font-size: 0.8em;" title="Reset AC to default">↺</button>
                  </div>
                  <div style="display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 0.85em;">
                    <span>Adjustment Amount:</span>
@@ -4218,6 +4231,9 @@ export function searchItems(query) {
         const hpMinusBtn = document.getElementById('hp-minus-btn');
         const acPlusBtn = document.getElementById('ac-plus-btn');
         const acMinusBtn = document.getElementById('ac-minus-btn');
+        
+        const hpResetBtn = document.getElementById('hp-reset-btn');
+        const acResetBtn = document.getElementById('ac-reset-btn');
 
         const updateTokenStats = async (newHp, newAc) => {
             try {
@@ -4231,7 +4247,15 @@ export function searchItems(query) {
                         const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
                         const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
 
-                        const name = item.metadata.name || item.text.plainText.split('\n')[0];
+                        // Try to get name from metadata, fallback to label only if it doesn't look like stats
+                        let name = item.metadata.name;
+                        if (!name && item.text && item.text.plainText) {
+                            const firstLine = item.text.plainText.split('\n')[0];
+                            if (!firstLine.startsWith('HP:') && !firstLine.startsWith('AC:')) {
+                                name = firstLine;
+                            }
+                        }
+                        if (!name) name = "Unknown";
                         
                         let newLabel = "";
                         if (!hideName) newLabel += name;
@@ -4283,6 +4307,32 @@ export function searchItems(query) {
         if (hpMinusBtn) hpMinusBtn.addEventListener('click', () => handleStatAdjustment('hp', -1));
         if (acPlusBtn) acPlusBtn.addEventListener('click', () => handleStatAdjustment('ac', 1));
         if (acMinusBtn) acMinusBtn.addEventListener('click', () => handleStatAdjustment('ac', -1));
+
+        if (hpResetBtn) {
+            hpResetBtn.addEventListener('click', async () => {
+                // Find original monster to get default HP
+                const original = monsters.find(m => m.name === data.name) || 
+                                 getCustomMonsters().find(m => m.name === data.name);
+                if (original) {
+                    const defaultHp = parseStat(original.hp);
+                    hpInput.value = defaultHp;
+                    await updateTokenStats(defaultHp, parseInt(acInput.value, 10));
+                }
+            });
+        }
+
+        if (acResetBtn) {
+            acResetBtn.addEventListener('click', async () => {
+                // Find original monster to get default AC
+                const original = monsters.find(m => m.name === data.name) || 
+                                 getCustomMonsters().find(m => m.name === data.name);
+                if (original) {
+                    const defaultAc = parseStat(original.ac);
+                    acInput.value = defaultAc;
+                    await updateTokenStats(parseInt(hpInput.value, 10), defaultAc);
+                }
+            });
+        }
 
         if (btn && hpInput && acInput) {
             btn.addEventListener('click', async () => {
