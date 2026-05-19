@@ -1,6 +1,9 @@
 import monsters from './monsters.json';
 import items from './items.json';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
+import * as pdfjsLib from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
@@ -594,17 +597,130 @@ function parseStatBlock(text) {
   if (!text) return {};
   const result = {};
   
-  // Normalize newlines and extra spaces
-  const normalized = text.replace(/\r\n/g, '\n').trim();
+  // Normalize common OCR issues, weird characters, and spacing
+  const normalized = text
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ') // Multiple spaces to single
+    .replace(/\n\s*\n/g, '\n') // Multiple newlines to single
+    .replace(/\u2013/g, '-') // En dash to hyphen
+    .replace(/\u2014/g, '-') // Em dash to hyphen
+    .replace(/\u2019/g, "'") // Smart single quote to regular
+    .replace(/\u201C/g, '"') // Smart double quote left
+    .replace(/\u201D/g, '"') // Smart double quote right
+    .replace(/\bArmour\b/gi, 'Armor') // British spelling to American
+    .replace(/\s*[-–—]\s*/g, ' ') // Replace " - " with single space
+    .replace(/\b(f t\.?|ft\.)\b/gi, 'ft.') // Fix "f t." to "ft."
+    .replace(/\b(en d|end)\b/gi, 'end') // Fix "en d" to "end"
+    .replace(/\b(ra gon|dragon)\b/gi, 'dragon') // Fix "ra gon" to dragon
+    .replace(/\b(5 - 6|5-6)\b/g, '5-6') // Fix "5 - 6" to "5-6"
+    .trim();
   
   console.log("parseStatBlock - normalized text:", normalized);
   
-  // 1. Parse Name (first non-empty line, usually)
-  const lines = normalized.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-  if (lines.length > 0) {
+  // 1. Parse Name and Type - find the REAL monster name, not actions
+  const allLines = normalized.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  let lines = allLines;
+  
+  // FIRST: Try to find the name using the BEST patterns FIRST
+  let foundNameFromBestPattern = false;
+  
+  // Pattern 1: "The [Name] can take..." (legendary actions) - BEST!
+  const legendaryNameMatch = normalized.match(/The\s+([\w\s]+?)\s+can take/i);
+  if (legendaryNameMatch && legendaryNameMatch[1]) {
+    result.name = legendaryNameMatch[1].trim();
+    console.log('Found name from legendary actions:', result.name);
+    foundNameFromBestPattern = true;
+  }
+  
+  // Pattern 2: "Adult/Ancient/Young [Monster]" anywhere in text
+  if (!foundNameFromBestPattern) {
+    const ageMonsterMatch = normalized.match(/(?:Adult|Ancient|Young|Wyrm|Wyrmling|Great\s+Wyrm)\s+[\w\s]+?(?:Dragon|Demon|Devil|Goblin|Orc|Beholder|Lich|Vampire|Werewolf|Zombie|Skeleton|Ghost|Spirit|Elemental|Fey|Fiend|Celestial|Monstrosity|Beast|Humanoid|Plant|Ooze|Construct|Undead)/i);
+    if (ageMonsterMatch) {
+      result.name = ageMonsterMatch[0].trim();
+      console.log('Found name from age pattern:', result.name);
+      foundNameFromBestPattern = true;
+    }
+  }
+  
+  // Filter out lines that are just action/trait names (end with period, no stats) for the rest
+  lines = allLines.filter(line => {
+    const isProbablyAction = line.endsWith('.') && !line.includes('Armor') && !line.includes('HP') && 
+                            !line.match(/\b\d+\b/) && !line.match(/\b(STR|DEX|CON|INT|WIS|CHA)\b/i) &&
+                            line.length < 80;
+    return !isProbablyAction;
+  });
+  
+  // Try to find a name - but only if we didn't find it from a good pattern already
+  let foundName = foundNameFromBestPattern;
+  
+  if (!foundName) {
+    // Common monster name patterns
+    const monsterNameKeywords = ['Dragon', 'Dragon', 'Goblin', 'Orc', 'Demon', 'Devil', 'Beholder', 'Lich', 'Vampire', 'Werewolf', 'Zombie', 'Skeleton', 'Ghost', 'Spirit', 'Elemental', 'Fey', 'Fiend', 'Celestial', 'Monstrosity', 'Beast', 'Humanoid', 'Plant', 'Ooze', 'Construct', 'Undead'];
+    
+    for (let i = 0; i < Math.min(lines.length, 3); i++) {
+      const line = lines[i];
+      const hasMonsterKeyword = monsterNameKeywords.some(kw => line.toLowerCase().includes(kw.toLowerCase()));
+      const hasSizeKeyword = ['Small', 'Medium', 'Large', 'Huge', 'Gargantuan', 'Tiny'].some(kw => line.toLowerCase().includes(kw.toLowerCase()));
+      
+      if (hasMonsterKeyword && !hasSizeKeyword) {
+        result.name = line;
+        foundName = true;
+        break;
+      }
+    }
+  }
+  
+  // If no clear name found, use first line (and it might be type too)
+  if (!foundName) {
+    // First, try to find the name anywhere in the entire normalized text
+    const adultMatch = normalized.match(/(?:Adult|Ancient|Young|Wyrm|Wyrmling)\s+[\w\s]+?(?:Dragon|Demon|Devil|Goblin|Orc|Beholder|Lich|Vampire|Werewolf|Zombie|Skeleton|Ghost|Spirit|Elemental|Fey|Fiend|Celestial|Monstrosity|Beast|Humanoid|Plant|Ooze|Construct|Undead)/i);
+    if (adultMatch) {
+      result.name = adultMatch[0].trim();
+      foundName = true;
+    }
+    
+    // Also check for "The [Name] can take..." pattern
+    if (!foundName) {
+      const legendaryMatch = normalized.match(/The\s+([\w\s]+?)\s+can take/i);
+      if (legendaryMatch && legendaryMatch[1]) {
+        result.name = legendaryMatch[1].trim();
+        foundName = true;
+      }
+    }
+  }
+  
+  if (!foundName && lines.length > 0) {
     const firstLine = lines[0];
     if (!firstLine.toLowerCase().includes('hp') && !firstLine.toLowerCase().includes('ac') && !firstLine.match(/^(str|dex|con|int|wis|cha)/i)) {
-      result.name = firstLine;
+      // Check if it's a type line (starts with size)
+      const startsWithSize = /^(Small|Medium|Large|Huge|Gargantuan|Tiny)/i.test(firstLine);
+      if (startsWithSize) {
+        // This is a type line - try to extract a name from it or just use "Unknown Monster"
+        result.type = firstLine;
+        // Try to find name by looking for creature type keywords
+        for (const kw of monsterNameKeywords) {
+          const idx = firstLine.toLowerCase().indexOf(kw.toLowerCase());
+          if (idx !== -1) {
+            // Extract from before size to end of keyword
+            let nameStart = 0;
+            for (const size of ['Small', 'Medium', 'Large', 'Huge', 'Gargantuan', 'Tiny']) {
+              const sizeIdx = firstLine.toLowerCase().indexOf(size.toLowerCase());
+              if (sizeIdx !== -1 && sizeIdx < idx) {
+                nameStart = sizeIdx + size.length + 1;
+                break;
+              }
+            }
+            result.name = firstLine.substring(nameStart, idx + kw.length).trim();
+            foundName = true;
+            break;
+          }
+        }
+        if (!foundName) {
+          result.name = "Unknown Monster";
+        }
+      } else {
+        result.name = firstLine;
+      }
     }
   }
   
@@ -612,6 +728,14 @@ function parseStatBlock(text) {
   const typeMatch = normalized.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\)]+?)(?:,|$)/i);
   if (typeMatch) {
     result.type = typeMatch[0].trim();
+  }
+  
+  // 3. FINAL GUARANTEED NAME CHECK - but only if we still don't have a name
+  if (!result.name || result.name === "Unknown Monster") {
+    const finalNameMatch = normalized.match(/(?:Adult|Ancient|Young|Wyrm|Wyrmling|Great\s+Wyrm)?\s*[\w\s]*?(?:Dragon|Demon|Devil|Goblin|Orc|Beholder|Lich|Vampire|Werewolf|Zombie|Skeleton|Ghost|Spirit|Elemental|Fey|Fiend|Celestial|Monstrosity|Beast|Humanoid|Plant|Ooze|Construct|Undead)/i);
+    if (finalNameMatch) {
+      result.name = finalNameMatch[0].trim();
+    }
   }
   
   // 3. Parse AC - multiple formats (with or without colon)
@@ -632,11 +756,275 @@ function parseStatBlock(text) {
     result.cr = crMatch[1].trim();
   }
   
+  // 6. Parse Ability Scores (STR, DEX, CON, INT, WIS, CHA)
+  const abilities = parseAbilities(normalized);
+  if (abilities.length > 0) {
+    // Convert abilities array to an object for easy use
+    result.stats = {};
+    abilities.forEach(ab => {
+      result.stats[ab.name.toLowerCase()] = ab.score;
+    });
+  }
+  
+  // 7. Parse Saving Throws
+  const saves = parseSavingThrows(normalized);
+  if (saves.length > 0) {
+    result.savingThrows = saves;
+  }
+  
+  // 8. Parse Skills
+  const skillsMatch = normalized.match(/Skills\s+([^:]+?)(?=\.|\s*(Damage|Condition|Senses|Languages|Challenge|ACTIONS|TRAITS|REACTIONS|LEGENDARY))/i);
+  if (skillsMatch && skillsMatch[1]) {
+    result.skills = skillsMatch[1].trim();
+  }
+  
+  // 9. Parse Senses
+  const sensesMatch = normalized.match(/Senses\s+([^:]+?)(?=\.|\s*(Damage|Condition|Languages|Challenge|ACTIONS|TRAITS|REACTIONS|LEGENDARY))/i);
+  if (sensesMatch && sensesMatch[1]) {
+    result.senses = sensesMatch[1].trim();
+  }
+  
+  // 10. Parse Languages
+  const languagesMatch = normalized.match(/Languages\s+([^:]+?)(?=\.|\s*(Damage|Condition|Challenge|ACTIONS|TRAITS|REACTIONS|LEGENDARY))/i);
+  if (languagesMatch && languagesMatch[1]) {
+    result.languages = languagesMatch[1].trim();
+  }
+  
+  // 11. Parse Damage Resistances
+  const drMatch = normalized.match(/Damage Resistances\s+([^:]+?)(?=\.|\s*(Damage|Condition|Senses|Languages|Challenge|ACTIONS|TRAITS|REACTIONS|LEGENDARY))/i);
+  if (drMatch && drMatch[1]) {
+    result.damageResistances = drMatch[1].trim();
+  }
+  
+  // 12. Parse Damage Immunities
+  const diMatch = normalized.match(/Damage Immunities\s+([^:]+?)(?=\.|\s*(Damage|Condition|Senses|Languages|Challenge|ACTIONS|TRAITS|REACTIONS|LEGENDARY))/i);
+  if (diMatch && diMatch[1]) {
+    result.damageImmunities = diMatch[1].trim();
+  }
+  
+  // 13. Parse Condition Immunities
+  const ciMatch = normalized.match(/Condition Immunities\s+([^:]+?)(?=\.|\s*(Damage|Condition|Senses|Languages|Challenge|ACTIONS|TRAITS|REACTIONS|LEGENDARY))/i);
+  if (ciMatch && ciMatch[1]) {
+    result.conditionImmunities = ciMatch[1].trim();
+  }
+  
   console.log("parseStatBlock - result:", result);
   
-  // 6. Abilities are parsed by existing parseAbilities function
-  
   return result;
+}
+
+// PDF Extraction Functions
+async function extractTextFromPDF(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+      try {
+        const typedArray = new Uint8Array(e.target.result);
+        const pdf = await pdfjsLib.getDocument({ data: typedArray }).promise;
+        let fullText = '';
+        
+        console.log(`PDF has ${pdf.numPages} page(s)`);
+        
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          
+          const sortedItems = textContent.items.sort((a, b) => {
+            const aY = a.transform[5];
+            const bY = b.transform[5];
+            if (Math.abs(aY - bY) < 5) {
+              return a.transform[4] - b.transform[4];
+            }
+            return bY - aY;
+          });
+          
+          const pageText = sortedItems.map(item => item.str).join(' ');
+          fullText += pageText + '\n\n';
+          
+          console.log(`Extracted page ${i}: ${pageText.length} chars`);
+        }
+        
+        console.log(`Total extracted text: ${fullText.length} chars`);
+        resolve(fullText);
+      } catch (err) {
+        console.error('PDF extraction error:', err);
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function extractMonstersFromPDFText(text) {
+  const monsters = [];
+  
+  const sizeKeywords = ['Small', 'Medium', 'Large', 'Huge', 'Gargantuan', 'Tiny'];
+  const allSizeKeywords = [...sizeKeywords, ...sizeKeywords.map(k => k.toLowerCase())];
+  
+  const stopKeywords = [
+    'CREATURE CODEX', 'TOME OF BEASTS', 'MONSTER MANUAL', 
+    'VOLO\'S GUIDE', 'MORDENKAINEN\'S', 'XANATHAR\'S',
+    'TALES FROM THE YAWNING PORTAL', 'GHOSTS OF SALTMARSH'
+  ];
+  
+  const lines = text.split(/\n+/).map(line => line.trim()).filter(line => line.length > 0);
+  
+  console.log(`extractMonstersFromPDFText: ${lines.length} lines to process`);
+  
+  let buffer = [];
+  let foundPotentialStart = false;
+  let foundAbilityScores = false;
+  let foundChallenge = false;
+  
+  const isLikelyMonsterStart = (line, nextLines = []) => {
+    const lineLower = line.toLowerCase();
+    
+    // FIRST: Reject if it looks like an action/trait (ends with period, short, has no numbers)
+    if (line.endsWith('.') && line.length < 50 && !line.match(/\b\d+\b/)) {
+      return false;
+    }
+    
+    const hasSizeKeyword = allSizeKeywords.some(kw => 
+      (lineLower.indexOf(kw) === 0 || lineLower.indexOf(' ' + kw) !== -1)
+    );
+    
+    const hasAC = /\b(?:armor class|ac)\s*:?\s*\d+/i.test(line);
+    const hasHP = /\b(?:hit points|hp)\s*:?\s*\d+/i.test(line);
+    const hasChallenge = /\b(?:challenge|cr)\s*:?\s*(?:\d+\/\d+|\d+)/i.test(line);
+    const hasAbilityScores = /\b(?:STR|DEX|CON|INT|WIS|CHA)\b/i.test(line);
+    
+    const nextHasStatsSoon = nextLines.slice(0, 10).some(l => 
+      /\b(?:STR|DEX|CON|INT|WIS|CHA)\b/i.test(l) ||
+      /\b(?:armor class|ac)\s*:?\s*\d+/i.test(l) ||
+      /\b(?:hit points|hp)\s*:?\s*\d+/i.test(l) ||
+      /\b(?:challenge|cr)\s*:?\s*(?:\d+\/\d+|\d+)/i.test(l)
+    );
+    
+    // ONLY accept if it's a size keyword AND we find stats soon OR it has multiple stats
+    const isGoodMonsterStart = (hasSizeKeyword && nextHasStatsSoon) ||
+                                 (hasSizeKeyword && (hasAC || hasHP || hasChallenge || hasAbilityScores)) ||
+                                 (hasAC && hasHP && hasChallenge);
+    
+    if (isGoodMonsterStart) {
+      console.log('✅ ACCEPTED as monster start:', line.substring(0, 150));
+    }
+    
+    return isGoodMonsterStart;
+  };
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const nextLines = lines.slice(i + 1, Math.min(i + 20, lines.length)); // Look ahead 20 lines
+    
+    if (!foundPotentialStart) {
+      if (isLikelyMonsterStart(line, nextLines)) {
+        console.log(`Found potential monster start at line ${i}:`, line.substring(0, 100));
+        foundPotentialStart = true;
+        foundAbilityScores = false;
+        foundChallenge = false;
+        buffer = [line];
+      }
+    } else {
+      buffer.push(line);
+      
+      // Track if we've seen ability scores or challenge yet
+      if (!foundAbilityScores && /\b(?:STR|DEX|CON|INT|WIS|CHA)\b/i.test(line)) {
+        foundAbilityScores = true;
+        console.log('Found ability scores in this monster');
+      }
+      if (!foundChallenge && /\b(?:challenge|cr)\s*:?\s*(?:\d+\/\d+|\d+)/i.test(line)) {
+        foundChallenge = true;
+        console.log('Found challenge rating in this monster');
+      }
+      
+      // Check if we should end the monster
+      const lineUpper = line.toUpperCase();
+      const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
+      const nextLineLower = nextLine.toLowerCase();
+      
+      const shouldEnd = 
+        stopKeywords.some(kw => lineUpper.includes(kw)) ||
+        (/^\d+$/.test(line) && line.length <= 3 && (foundAbilityScores || foundChallenge || buffer.length > 30)) ||
+        (allSizeKeywords.some(kw => 
+          nextLineLower.includes(kw) && (
+            nextLineLower.indexOf(kw) === 0 || 
+            nextLineLower.indexOf(' ' + kw) !== -1
+          )
+        ) && (foundAbilityScores || foundChallenge || buffer.length > 30));
+      
+      if (shouldEnd) {
+        console.log(`Ending monster at line ${i}, buffer length: ${buffer.length}`);
+        
+        const monsterText = buffer.join('\n');
+        const parsed = parseStatBlock(monsterText);
+        
+        if (parsed.name || parsed.ac || parsed.hp || parsed.cr) {
+          monsters.push({
+            rawText: monsterText,
+            parsed: parsed
+          });
+          console.log('Added monster:', parsed.name || 'Unknown');
+        }
+        
+        buffer = [];
+        foundPotentialStart = false;
+        foundAbilityScores = false;
+        foundChallenge = false;
+      }
+    }
+  }
+  
+  // Add the last monster if we were still building one
+  if (foundPotentialStart && buffer.length > 0) {
+    const monsterText = buffer.join('\n');
+    const parsed = parseStatBlock(monsterText);
+    if (parsed.name || parsed.ac || parsed.hp || parsed.cr) {
+      monsters.push({
+        rawText: monsterText,
+        parsed: parsed
+      });
+    }
+  }
+  
+  console.log(`extractMonstersFromPDFText: Found ${monsters.length} monsters total`);
+  
+  const uniqueMonsters = [];
+  const seenNames = new Set();
+  for (const m of monsters) {
+    const name = (m.parsed?.name || '').toLowerCase().trim();
+    if (name && !seenNames.has(name)) {
+      seenNames.add(name);
+      uniqueMonsters.push(m);
+    } else if (!name) {
+      uniqueMonsters.push(m);
+    }
+  }
+  
+  return uniqueMonsters;
+}
+
+function saveExtractedMonstersToGlobal(monsters) {
+  try {
+    const existing = JSON.parse(localStorage.getItem('dnd_extension_extracted_monsters') || '[]');
+    const newMonsters = monsters.filter(m => 
+      !existing.some(e => e.parsed?.name === m.parsed?.name)
+    );
+    const all = [...existing, ...newMonsters];
+    localStorage.setItem('dnd_extension_extracted_monsters', JSON.stringify(all));
+    return newMonsters.length;
+  } catch (e) {
+    console.error('Failed to save extracted monsters:', e);
+    return 0;
+  }
+}
+
+function getExtractedMonstersFromGlobal() {
+  try {
+    return JSON.parse(localStorage.getItem('dnd_extension_extracted_monsters') || '[]');
+  } catch (e) {
+    return [];
+  }
 }
 
 // Custom Data Helpers
@@ -2226,6 +2614,17 @@ export function searchItems(query) {
                 <input type="checkbox" id="hide-cr-checkbox"> Hide CR
             </label>
         </div>
+        
+        <div id="pdf-upload-section" style="margin-bottom: 10px; padding: 10px; background: #f0f8ff; border: 2px dashed #4a90d9; border-radius: 6px; text-align: center;">
+            <div style="font-size: 0.9em; font-weight: bold; color: #333; margin-bottom: 8px;">📄 Upload PDF for Monster/Item Extraction</div>
+            <input type="file" id="pdf-upload-input" accept=".pdf,application/pdf" style="display: none;">
+            <button id="pdf-upload-btn" style="padding: 8px 16px; background: #4a90d9; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+                Select PDF File
+            </button>
+            <div id="pdf-upload-status" style="margin-top: 8px; font-size: 0.8em; color: #666;"></div>
+            <div id="pdf-extracted-monsters" style="margin-top: 10px; display: none; text-align: left; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 4px; padding: 8px;">
+            </div>
+        </div>
 
         <div id="monster-filters" style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px;">
           <label style="font-size: 0.9em; cursor: pointer;">
@@ -2278,6 +2677,9 @@ export function searchItems(query) {
         <div style="display: flex; flex-direction: column; gap: 8px;">
             <input id="editor-name" placeholder="Name" style="padding: 5px; width: 100%; box-sizing: border-box;">
             <input id="editor-image-url" placeholder="Image URL (optional)" style="padding: 5px; width: 100%; box-sizing: border-box;">
+            <div style="margin-top: 10px;">
+              <input type="file" id="editor-portrait-upload-input" accept="image/*">
+            </div>
             <div id="editor-image-preview-container" style="display: none; margin-top: 5px; align-items: center; gap: 10px;">
                 <img id="editor-image-preview" style="width: 50px; height: 50px; object-fit: contain; border: 1px solid #555; background: #333;" />
                 <span id="editor-image-status" style="font-size: 0.8em; color: #aaa;"></span>
@@ -2490,6 +2892,7 @@ export function searchItems(query) {
   const editorImagePreview = document.getElementById('editor-image-preview');
   const editorImageStatus = document.getElementById('editor-image-status');
   const editorClearImageBtn = document.getElementById('editor-clear-image-btn');
+  const editorPortraitUploadInput = document.getElementById('editor-portrait-upload-input');
   const editorUsedImages = document.getElementById('editor-used-images');
   const editorMonsterFields = document.getElementById('editor-monster-fields');
   const editorItemFields = document.getElementById('editor-item-fields');
@@ -2512,10 +2915,13 @@ export function searchItems(query) {
   const editorCastShapeBtn = document.getElementById('editor-cast-shape-btn');
   const editorSpellDesc = document.getElementById('editor-spell-desc');
 
+  let lastParsedStatBlock = null;
+  
   // Helper to auto-fill form fields from stat block
   function autoFillFromStatBlock() {
     const text = editorDesc.value;
     const parsed = parseStatBlock(text);
+    lastParsedStatBlock = parsed;
     
     if (parsed.name && !editorName.value) {
       editorName.value = parsed.name;
@@ -2582,6 +2988,24 @@ export function searchItems(query) {
     editorDesc.addEventListener('input', autoFillFromStatBlock);
   }
   if (editorItemDesc) editorItemDesc.addEventListener('paste', cleanPdfPaste);
+  
+  // Portrait Upload Logic - SUPER SIMPLE!
+  if (editorPortraitUploadInput) {
+    editorPortraitUploadInput.addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const base64 = event.target.result;
+        editorImageUrl.value = base64;
+        editorImagePreview.src = base64;
+        editorImagePreviewContainer.style.display = 'flex';
+        editorImageStatus.innerText = 'Uploaded!';
+      };
+      reader.readAsDataURL(file);
+    });
+  }
 
   let editorMode = 'monster'; 
   let editorOriginalName = null;
@@ -2658,6 +3082,17 @@ export function searchItems(query) {
           editorCr.value = data ? data.cr || '' : '';
           editorType.value = data ? data.type || '' : '';
           editorDesc.value = data ? data.description || '' : '';
+          
+          lastParsedStatBlock = data ? {
+            stats: data.stats || {},
+            savingThrows: data.savingThrows,
+            skills: data.skills,
+            senses: data.senses,
+            languages: data.languages,
+            damageResistances: data.damageResistances,
+            damageImmunities: data.damageImmunities,
+            conditionImmunities: data.conditionImmunities
+          } : null;
       } else if (mode === 'spell') {
           editorMonsterFields.style.display = 'none';
           editorItemFields.style.display = 'none';
@@ -2817,6 +3252,14 @@ export function searchItems(query) {
               type: editorType.value,
               description: editorDesc.value,
               source: editorOriginalSource || "Custom",
+              stats: lastParsedStatBlock?.stats || {},
+              savingThrows: lastParsedStatBlock?.savingThrows,
+              skills: lastParsedStatBlock?.skills,
+              senses: lastParsedStatBlock?.senses,
+              languages: lastParsedStatBlock?.languages,
+              damageResistances: lastParsedStatBlock?.damageResistances,
+              damageImmunities: lastParsedStatBlock?.damageImmunities,
+              conditionImmunities: lastParsedStatBlock?.conditionImmunities,
               // Backup: Save image in object if it's short (not Base64) or if we want to force it
               // We only save it in the object if it's NOT a huge data URI, to prevent bloating the main list
               image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
@@ -3059,6 +3502,128 @@ export function searchItems(query) {
           };
           reader.readAsText(file);
       });
+  }
+
+  // PDF Upload Logic
+  const pdfUploadBtn = document.getElementById('pdf-upload-btn');
+  const pdfUploadInput = document.getElementById('pdf-upload-input');
+  const pdfUploadStatus = document.getElementById('pdf-upload-status');
+  const pdfExtractedMonsters = document.getElementById('pdf-extracted-monsters');
+  const pdfUploadSection = document.getElementById('pdf-upload-section');
+
+  if (pdfUploadBtn && pdfUploadInput) {
+    pdfUploadBtn.addEventListener('click', () => pdfUploadInput.click());
+    
+    pdfUploadInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      pdfUploadStatus.style.color = '#333';
+      pdfUploadStatus.textContent = `Processing: ${file.name}...`;
+      pdfExtractedMonsters.style.display = 'none';
+      
+      try {
+        const text = await extractTextFromPDF(file);
+        pdfUploadStatus.textContent = 'Extracting monsters...';
+        
+        const extractedMonsters = extractMonstersFromPDFText(text);
+        
+        if (extractedMonsters.length === 0) {
+          pdfUploadStatus.style.color = '#ff6b6b';
+          pdfUploadStatus.innerHTML = `
+            No monsters found in PDF.<br>
+            <span style="font-size: 0.8em; color: #888;">
+              Extracted ${text.length} characters. 
+              <button id="show-extracted-text-btn" style="background: none; border: none; color: #4a90d9; cursor: pointer; text-decoration: underline;">Show sample text</button>
+            </span>
+          `;
+          
+          setTimeout(() => {
+            const showBtn = document.getElementById('show-extracted-text-btn');
+            if (showBtn) {
+              showBtn.addEventListener('click', () => {
+                const sample = text.substring(0, 2000);
+                alert('Extracted text sample (first 2000 chars):\n\n' + sample);
+              });
+            }
+          }, 0);
+          
+          return;
+        }
+        
+        const savedCount = saveExtractedMonstersToGlobal(extractedMonsters);
+        pdfUploadStatus.style.color = '#4CAF50';
+        pdfUploadStatus.innerHTML = `Success! Found ${extractedMonsters.length} monster(s), saved ${savedCount} new one(s) to global storage.<br>
+          <span style="font-size: 0.8em; color: #888;">
+            <button id="show-full-extracted-btn" style="background: none; border: none; color: #4a90d9; cursor: pointer; text-decoration: underline; margin-top: 5px;">Show Full Extracted Text</button>
+          </span>`;
+        
+        pdfExtractedMonsters.style.display = 'block';
+        pdfExtractedMonsters.innerHTML = extractedMonsters.map((m, idx) => {
+          const name = m.parsed?.name || `Monster ${idx + 1}`;
+          const stats = [];
+          if (m.parsed?.ac) stats.push(`AC: ${m.parsed.ac}`);
+          if (m.parsed?.hp) stats.push(`HP: ${m.parsed.hp}`);
+          if (m.parsed?.cr) stats.push(`CR: ${m.parsed.cr}`);
+          
+          return `
+            <div style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer;" class="extracted-monster-item" data-index="${idx}">
+              <div style="font-weight: bold; color: #333;">${name}</div>
+              <div style="font-size: 0.8em; color: #666;">${stats.join(' | ')}</div>
+            </div>
+          `;
+        }).join('');
+        
+        pdfExtractedMonsters.querySelectorAll('.extracted-monster-item').forEach((item, idx) => {
+          item.addEventListener('click', () => {
+            const monster = extractedMonsters[idx];
+            openEditor('monster', {
+              name: monster.parsed?.name || '',
+              hp: monster.parsed?.hp || '',
+              ac: monster.parsed?.ac || '',
+              cr: monster.parsed?.cr || '',
+              type: monster.parsed?.type || '',
+              description: monster.rawText || ''
+            });
+          });
+        });
+        
+        setTimeout(() => {
+          const showFullBtn = document.getElementById('show-full-extracted-btn');
+          if (showFullBtn) {
+            let textAreaVisible = false;
+            let textAreaElement = null;
+            
+            showFullBtn.addEventListener('click', () => {
+              if (!textAreaVisible) {
+                textAreaElement = document.createElement('textarea');
+                textAreaElement.value = text;
+                textAreaElement.style.width = '100%';
+                textAreaElement.style.height = '400px';
+                textAreaElement.style.marginTop = '10px';
+                textAreaElement.className = 'border rounded p-2 text-sm';
+                pdfUploadSection.appendChild(textAreaElement);
+                showFullBtn.textContent = 'Hide Extracted Text';
+                textAreaVisible = true;
+              } else {
+                if (textAreaElement) {
+                  textAreaElement.remove();
+                }
+                showFullBtn.textContent = 'Show Full Extracted Text';
+                textAreaVisible = false;
+              }
+            });
+          }
+        }, 0);
+        
+      } catch (err) {
+        console.error('PDF extraction failed:', err);
+        pdfUploadStatus.style.color = '#ff6b6b';
+        pdfUploadStatus.textContent = `Error: ${err.message}`;
+      }
+      
+      pdfUploadInput.value = '';
+    });
   }
 
   // Export Source Logic (for Hosting)
