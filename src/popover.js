@@ -3090,62 +3090,160 @@ export function searchItems(query) {
   function extractMonstersFromText(text, fileName) {
     const monsters = [];
     
-    // First, split into potential monster blocks
-    // Look for lines that start with a monster name followed by size/type
-    // This is a heuristic approach - can be improved based on your PDF format
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    let currentMonster = null;
+    // First, normalize the text - remove extra spaces, normalize newlines
+    let normalizedText = text.replace(/\r\n/g, '\n');
+    normalizedText = normalizedText.replace(/[ \t]+/g, ' ');
     
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    // First, let's look for common stat block markers to split the text into blocks
+    // Stat blocks usually have:
+    // - AC
+    // - HP
+    // - CR or Challenge
+    // - Size + Type
+    
+    // Let's split the text into potential blocks using common section headers as markers
+    const sectionHeaders = [
+      'TRAITS', 'ACTIONS', 'LEGENDARY ACTIONS', 'REACTIONS', 'SPELLCASTING',
+      'ABILITY SCORES', 'SAVING THROWS', 'SKILLS', 'DAMAGE RESISTANCES',
+      'DAMAGE IMMUNITIES', 'CONDITION IMMUNITIES', 'SENSES', 'LANGUAGES'
+    ];
+    
+    // First, let's find all positions of AC, HP, CR/Challenge
+    const potentialStatBlocks = [];
+    
+    // First, find all matches of "Armor Class" or "AC" followed by a number
+    const acRegex = /(Armor Class|AC)\s*:?\s*(\d+)/gi;
+    let match;
+    
+    // For each AC match, look back and forward to find the full stat block
+    while ((match = acRegex.exec(normalizedText)) !== null) {
+      const acIndex = match.index;
       
-      // Check if this is a monster stat block start (contains size + type)
-      const sizeTypeMatch = line.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\)]+)/i);
+      // Look back up to 500 characters to find the monster name and size/type
+      let startIndex = Math.max(0, acIndex - 1000);
+      let preText = normalizedText.substring(startIndex, acIndex);
       
-      if (sizeTypeMatch) {
-        // If we have a current monster, add it to the list
-        if (currentMonster && currentMonster.name) {
-          monsters.push(currentMonster);
+      // Look for a size/type line (Small/Medium/Large/Huge/Gargantuan/Tiny followed by type)
+      const sizeTypeRegex = /(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\),]+)/gi;
+      let sizeTypeMatch;
+      let bestSizeTypeMatch = null;
+      let bestSizeTypeIndex = -1;
+      
+      while ((sizeTypeMatch = sizeTypeRegex.exec(preText)) !== null) {
+        const matchIndex = startIndex + sizeTypeMatch.index;
+        if (matchIndex > bestSizeTypeIndex) {
+          bestSizeTypeMatch = sizeTypeMatch;
+          bestSizeTypeIndex = matchIndex;
         }
+      }
+      
+      if (bestSizeTypeMatch) {
+        // Now look for the monster name - it's probably in the text before the size/type
+        let nameStartIndex = Math.max(0, bestSizeTypeIndex - 500);
+        let nameText = normalizedText.substring(nameStartIndex, bestSizeTypeIndex).trim();
         
-        // Start a new monster - the previous line is probably the name
-        let name = lines[i - 1] || "Unknown Monster";
-        // If name is empty or too short, try to get name from this line or skip
-        if (name.length < 2 || name.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny|HP|AC|CR)/i)) {
-          // Maybe the name is in the current line before size/type?
-          const beforeSizeType = line.split(/(Small|Medium|Large|Huge|Gargantuan|Tiny)/i)[0].trim();
-          if (beforeSizeType.length > 2) {
-            name = beforeSizeType;
-          } else {
-            // Skip this block if we can't find a name
-            currentMonster = null;
-            continue;
+        // Split nameText into lines and take the last non-empty line as the name
+        const nameLines = nameText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        let monsterName = nameLines.length > 0 ? nameLines[nameLines.length - 1] : "Unknown Monster";
+        
+        // Clean up the name - remove any leading numbers, symbols, etc.
+        monsterName = monsterName.replace(/^[0-9\.\-\–\—\s]+/, '').trim();
+        
+        // Now look for the end of the stat block - usually the next section header
+        let endIndex = normalizedText.length;
+        for (const header of sectionHeaders) {
+          const headerIndex = normalizedText.indexOf(header, acIndex);
+          if (headerIndex !== -1 && headerIndex < endIndex) {
+            endIndex = headerIndex;
           }
         }
         
-        currentMonster = {
-          name: name,
-          type: line,
-          source: fileName,
-          description: ""
-        };
-      } else if (currentMonster) {
-        // Add this line to the current monster's description
-        currentMonster.description += line + "\n";
+        // Extract the full stat block text
+        const fullStatBlockText = normalizedText.substring(bestSizeTypeIndex - 200, endIndex);
         
-        // Try to parse HP, AC, CR from this line and add to currentMonster
-        const parsed = parseStatBlock(currentMonster.name + "\n" + currentMonster.type + "\n" + currentMonster.description);
-        if (parsed.hp) currentMonster.hp = parsed.hp;
-        if (parsed.ac) currentMonster.ac = parsed.ac;
-        if (parsed.cr) currentMonster.cr = parsed.cr;
-        if (parsed.type) currentMonster.type = parsed.type;
+        // Now parse this full stat block with our parseStatBlock function
+        const parsed = parseStatBlock(monsterName + "\n" + fullStatBlockText);
+        
+        const monster = {
+          name: parsed.name || monsterName,
+          hp: parsed.hp,
+          ac: parsed.ac,
+          cr: parsed.cr,
+          type: parsed.type || bestSizeTypeMatch[0],
+          description: fullStatBlockText,
+          source: fileName
+        };
+        
+        // Check if we already have this monster (by name) to avoid duplicates
+        const alreadyExists = monsters.some(m => m.name.toLowerCase() === monster.name.toLowerCase());
+        if (!alreadyExists && monster.name !== "Unknown Monster") {
+          monsters.push(monster);
+        }
       }
     }
     
-    // Add the last monster
-    if (currentMonster && currentMonster.name) {
-      monsters.push(currentMonster);
+    // Also try a second approach - look for CR/Challenge first
+    const crRegex = /(Challenge Rating|Challenge|CR)\s*:?\s*([0-9\/\-—]+)/gi;
+    while ((match = crRegex.exec(normalizedText)) !== null) {
+      const crIndex = match.index;
+      
+      // Look back up to 1500 characters to find the monster name and size/type
+      let startIndex = Math.max(0, crIndex - 1500);
+      let preText = normalizedText.substring(startIndex, crIndex);
+      
+      // Look for a size/type line
+      const sizeTypeRegex = /(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\),]+)/gi;
+      let sizeTypeMatch;
+      let bestSizeTypeMatch = null;
+      let bestSizeTypeIndex = -1;
+      
+      while ((sizeTypeMatch = sizeTypeRegex.exec(preText)) !== null) {
+        const matchIndex = startIndex + sizeTypeMatch.index;
+        if (matchIndex > bestSizeTypeIndex) {
+          bestSizeTypeMatch = sizeTypeMatch;
+          bestSizeTypeIndex = matchIndex;
+        }
+      }
+      
+      if (bestSizeTypeMatch) {
+        // Now look for the monster name
+        let nameStartIndex = Math.max(0, bestSizeTypeIndex - 500);
+        let nameText = normalizedText.substring(nameStartIndex, bestSizeTypeIndex).trim();
+        const nameLines = nameText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        let monsterName = nameLines.length > 0 ? nameLines[nameLines.length - 1] : "Unknown Monster";
+        monsterName = monsterName.replace(/^[0-9\.\-\–\—\s]+/, '').trim();
+        
+        // Now look for the end of the stat block
+        let endIndex = normalizedText.length;
+        for (const header of sectionHeaders) {
+          const headerIndex = normalizedText.indexOf(header, crIndex);
+          if (headerIndex !== -1 && headerIndex < endIndex) {
+            endIndex = headerIndex;
+          }
+        }
+        
+        const fullStatBlockText = normalizedText.substring(bestSizeTypeIndex - 200, endIndex);
+        const parsed = parseStatBlock(monsterName + "\n" + fullStatBlockText);
+        
+        const monster = {
+          name: parsed.name || monsterName,
+          hp: parsed.hp,
+          ac: parsed.ac,
+          cr: parsed.cr,
+          type: parsed.type || bestSizeTypeMatch[0],
+          description: fullStatBlockText,
+          source: fileName
+        };
+        
+        const alreadyExists = monsters.some(m => m.name.toLowerCase() === monster.name.toLowerCase());
+        if (!alreadyExists && monster.name !== "Unknown Monster") {
+          monsters.push(monster);
+        }
+      }
     }
+    
+    // Sort the monsters by name
+    monsters.sort((a, b) => a.name.localeCompare(b.name));
     
     return monsters;
   }
