@@ -597,6 +597,8 @@ function parseStatBlock(text) {
   if (!text) return {};
   const result = {};
   
+  const knownDeityNames = ['Anansi', 'Baba Yaga', 'Batara Kala', 'Freyja', 'Fuji', 'Hekate', 'Inti', 'Ishtar', 'Mazu', 'Nayenezgani', 'Shango', 'Shiva', 'Tchernobog', 'Tengri', 'Turan', 'Viviene'];
+  
   // Normalize common OCR issues, weird characters, and spacing
   const normalized = text
     .replace(/\r\n/g, '\n')
@@ -617,19 +619,45 @@ function parseStatBlock(text) {
   
   console.log("parseStatBlock - normalized text:", normalized);
   
-  // 1. Parse Name and Type - find the REAL monster name, not actions
+  // 1. Parse Name and Type - PRIORITIZE KNOWN DEITY NAMES FIRST!
   const allLines = normalized.split('\n').map(line => line.trim()).filter(line => line.length > 0);
   let lines = allLines;
   
   // FIRST: Try to find the name using the BEST patterns FIRST
   let foundNameFromBestPattern = false;
   
-  // Pattern 1: "The [Name] can take..." (legendary actions) - BEST!
-  const legendaryNameMatch = normalized.match(/The\s+([\w\s]+?)\s+can take/i);
-  if (legendaryNameMatch && legendaryNameMatch[1]) {
-    result.name = legendaryNameMatch[1].trim();
-    console.log('Found name from legendary actions:', result.name);
-    foundNameFromBestPattern = true;
+  // PATTERN 0: FIRST CHECK ALL LINES FOR KNOWN DEITY NAMES - THIS IS #1 PRIORITY!
+  for (const line of allLines) {
+    for (const deityName of knownDeityNames) {
+      if (line.toLowerCase().includes(deityName.toLowerCase())) {
+        // If the line is JUST the deity name, use that
+        if (line.toLowerCase().trim() === deityName.toLowerCase().trim()) {
+          result.name = deityName;
+          console.log('✅✅✅✅✅ Found EXACT deity name:', result.name);
+          foundNameFromBestPattern = true;
+          break;
+        }
+        // If the line contains the deity name, extract just the name
+        const idx = line.toLowerCase().indexOf(deityName.toLowerCase());
+        if (idx !== -1) {
+          result.name = deityName;
+          console.log('✅✅✅✅✅ Found deity name in line:', result.name);
+          foundNameFromBestPattern = true;
+          break;
+        }
+      }
+    }
+    if (foundNameFromBestPattern) break;
+  }
+  
+  // Pattern 1: "The [Name] can take..." (legendary actions) - but ONLY if we didn't find a deity name
+  if (!foundNameFromBestPattern) {
+    const legendaryNameMatch = normalized.match(/The\s+([\w\s]+?)\s+can take/i);
+    if (legendaryNameMatch && legendaryNameMatch[1]) {
+      result.name = legendaryNameMatch[1].trim();
+      console.log('Found name from legendary actions:', result.name);
+      foundNameFromBestPattern = true;
+    }
   }
   
   // Pattern 2: "Adult/Ancient/Young [Monster]" anywhere in text
@@ -829,19 +857,44 @@ async function extractTextFromPDF(file) {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
           
-          const sortedItems = textContent.items.sort((a, b) => {
-            const aY = a.transform[5];
-            const bY = b.transform[5];
-            if (Math.abs(aY - bY) < 5) {
-              return a.transform[4] - b.transform[4];
+          // Group text items into lines by Y-coordinate!
+          const linesMap = new Map();
+          for (const item of textContent.items) {
+            const y = Math.round(item.transform[5]);
+            if (!linesMap.has(y)) {
+              linesMap.set(y, []);
             }
-            return bY - aY;
-          });
+            linesMap.get(y).push(item);
+          }
           
-          const pageText = sortedItems.map(item => item.str).join(' ');
-          fullText += pageText + '\n\n';
+          // Sort lines by Y (top to bottom)
+          const sortedYs = Array.from(linesMap.keys()).sort((a, b) => b - a);
           
-          console.log(`Extracted page ${i}: ${pageText.length} chars`);
+          // For each line: sort items by X and join to make text
+          const pageLines = [];
+          for (const y of sortedYs) {
+            const items = linesMap.get(y);
+            items.sort((a, b) => a.transform[4] - b.transform[4]);
+            const lineText = items.map(i => i.str).join('').trim();
+            if (lineText.length > 0) {
+              pageLines.push(lineText);
+            }
+          }
+          
+          // Add page break marker
+          if (i > 1) {
+            fullText += '\n---PAGE_BREAK---\n';
+          }
+          
+          // Mark first line of page as TOP_OF_PAGE!
+          if (pageLines.length > 0) {
+            pageLines[0] = '---TOP_OF_PAGE---' + pageLines[0];
+          }
+          
+          const pageText = pageLines.join('\n');
+          fullText += pageText + '\n';
+          
+          console.log(`Extracted page ${i}: ${pageLines.length} lines, ${pageText.length} chars`);
         }
         
         console.log(`Total extracted text: ${fullText.length} chars`);
@@ -857,7 +910,7 @@ async function extractTextFromPDF(file) {
 }
 
 function extractMonstersFromPDFText(text) {
-  const monsters = [];
+  const extractedMonsters = [];
   
   const sizeKeywords = ['Small', 'Medium', 'Large', 'Huge', 'Gargantuan', 'Tiny'];
   const allSizeKeywords = [...sizeKeywords, ...sizeKeywords.map(k => k.toLowerCase())];
@@ -868,57 +921,95 @@ function extractMonstersFromPDFText(text) {
     'TALES FROM THE YAWNING PORTAL', 'GHOSTS OF SALTMARSH'
   ];
   
-  const lines = text.split(/\n+/).map(line => line.trim()).filter(line => line.length > 0);
+  // Create a list of known monster names from our built-in monsters.json!
+  const knownMonsterNames = new Set(
+    monsters.map(m => m.name.toLowerCase())
+  );
+  console.log('Known monsters in index:', knownMonsterNames.size);
   
-  console.log(`extractMonstersFromPDFText: ${lines.length} lines to process`);
+  // Process lines, track which are at top of page
+  const processedLines = [];
+  let isAtTopOfPage = false;
+  
+  const rawLines = text.split(/\n+/);
+  for (let line of rawLines) {
+    let trimmedLine = line.trim();
+    let lineIsTopOfPage = isAtTopOfPage;
+    
+    // Check if LINE STARTS with markers! (they're prepended now)
+    if (trimmedLine.startsWith('---TOP_OF_PAGE---')) {
+      lineIsTopOfPage = true;
+      trimmedLine = trimmedLine.substring('---TOP_OF_PAGE---'.length).trim();
+    }
+    if (trimmedLine.startsWith('---PAGE_BREAK---')) {
+      continue;
+    }
+    if (trimmedLine.length === 0) continue;
+    
+    processedLines.push({
+      text: trimmedLine,
+      isTopOfPage: lineIsTopOfPage
+    });
+    isAtTopOfPage = false;
+  }
+  
+  console.log(`extractMonstersFromPDFText: ${processedLines.length} lines to process`);
   
   let buffer = [];
   let foundPotentialStart = false;
   let foundAbilityScores = false;
   let foundChallenge = false;
   
-  const isLikelyMonsterStart = (line, nextLines = []) => {
+  const knownDeityNames = ['Anansi', 'Baba Yaga', 'Batara Kala', 'Freyja', 'Fuji', 'Hekate', 'Inti', 'Ishtar', 'Mazu', 'Nayenezgani', 'Shango', 'Shiva', 'Tchernobog', 'Tengri', 'Turan', 'Viviene'];
+  
+  const isLikelyMonsterStart = (line, nextLines = [], knownMonsterNames, isTopOfPage) => {
     const lineLower = line.toLowerCase();
+    const lineTrimmed = line.trim();
     
-    // FIRST: Reject if it looks like an action/trait (ends with period, short, has no numbers)
-    if (line.endsWith('.') && line.length < 50 && !line.match(/\b\d+\b/)) {
-      return false;
+    // 1. ACCEPT if TOP-OF-PAGE AND it's a KNOWN DEITY NAME
+    if (isTopOfPage) {
+      const isKnownDeity = knownDeityNames.some(name => 
+        lineTrimmed.toLowerCase() === name.toLowerCase() || 
+        lineTrimmed.toLowerCase().includes(name.toLowerCase())
+      );
+      if (isKnownDeity) {
+        console.log('✅✅✅✅✅ ACCEPTED TOP-OF-PAGE KNOWN DEITY!', lineTrimmed.substring(0, 150));
+        return true;
+      }
     }
     
-    const hasSizeKeyword = allSizeKeywords.some(kw => 
-      (lineLower.indexOf(kw) === 0 || lineLower.indexOf(' ' + kw) !== -1)
-    );
+    // 2. ACCEPT if it STARTS WITH SIZE KEYWORD and has DEITY/MONSTER TYPE
+    const sizeKeywords = ['Small', 'Medium', 'Large', 'Huge', 'Gargantuan', 'Tiny'];
+    const startsWithSize = sizeKeywords.some(kw => lineTrimmed.startsWith(kw));
+    const hasDeityType = ['deity', 'god', 'goddess', 'avatar', 'demi-god', 'titan', 'dragon', 'demon', 'devil'].some(kw => lineLower.includes(kw));
     
-    const hasAC = /\b(?:armor class|ac)\s*:?\s*\d+/i.test(line);
-    const hasHP = /\b(?:hit points|hp)\s*:?\s*\d+/i.test(line);
-    const hasChallenge = /\b(?:challenge|cr)\s*:?\s*(?:\d+\/\d+|\d+)/i.test(line);
-    const hasAbilityScores = /\b(?:STR|DEX|CON|INT|WIS|CHA)\b/i.test(line);
-    
-    const nextHasStatsSoon = nextLines.slice(0, 10).some(l => 
-      /\b(?:STR|DEX|CON|INT|WIS|CHA)\b/i.test(l) ||
-      /\b(?:armor class|ac)\s*:?\s*\d+/i.test(l) ||
-      /\b(?:hit points|hp)\s*:?\s*\d+/i.test(l) ||
-      /\b(?:challenge|cr)\s*:?\s*(?:\d+\/\d+|\d+)/i.test(l)
-    );
-    
-    // ONLY accept if it's a size keyword AND we find stats soon OR it has multiple stats
-    const isGoodMonsterStart = (hasSizeKeyword && nextHasStatsSoon) ||
-                                 (hasSizeKeyword && (hasAC || hasHP || hasChallenge || hasAbilityScores)) ||
-                                 (hasAC && hasHP && hasChallenge);
-    
-    if (isGoodMonsterStart) {
-      console.log('✅ ACCEPTED as monster start:', line.substring(0, 150));
+    if (startsWithSize && hasDeityType) {
+      console.log('✅✅✅ ACCEPTED SIZE + DEITY TYPE!', lineTrimmed.substring(0, 150));
+      return true;
     }
     
-    return isGoodMonsterStart;
+    // 3. ACCEPT if it's EXACTLY a KNOWN DEITY NAME (anywhere in page)
+    const isExactKnownDeity = knownDeityNames.some(name => 
+      lineTrimmed.toLowerCase() === name.toLowerCase()
+    );
+    if (isExactKnownDeity) {
+      console.log('✅✅✅ ACCEPTED EXACT KNOWN DEITY!', lineTrimmed.substring(0, 150));
+      return true;
+    }
+    
+    return false;
   };
   
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const nextLines = lines.slice(i + 1, Math.min(i + 20, lines.length)); // Look ahead 20 lines
+  for (let i = 0; i < processedLines.length; i++) {
+    const lineObj = processedLines[i];
+    const line = lineObj.text;
+    const isTopOfPage = lineObj.isTopOfPage;
+    
+    // Extract text-only lines for nextLines
+    const nextLines = processedLines.slice(i + 1, Math.min(i + 20, processedLines.length)).map(l => l.text);
     
     if (!foundPotentialStart) {
-      if (isLikelyMonsterStart(line, nextLines)) {
+      if (isLikelyMonsterStart(line, nextLines, knownMonsterNames, isTopOfPage)) {
         console.log(`Found potential monster start at line ${i}:`, line.substring(0, 100));
         foundPotentialStart = true;
         foundAbilityScores = false;
@@ -940,18 +1031,13 @@ function extractMonstersFromPDFText(text) {
       
       // Check if we should end the monster
       const lineUpper = line.toUpperCase();
-      const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
+      const nextLineObj = i < processedLines.length - 1 ? processedLines[i + 1] : null;
+      const nextLine = nextLineObj ? nextLineObj.text : '';
       const nextLineLower = nextLine.toLowerCase();
       
       const shouldEnd = 
         stopKeywords.some(kw => lineUpper.includes(kw)) ||
-        (/^\d+$/.test(line) && line.length <= 3 && (foundAbilityScores || foundChallenge || buffer.length > 30)) ||
-        (allSizeKeywords.some(kw => 
-          nextLineLower.includes(kw) && (
-            nextLineLower.indexOf(kw) === 0 || 
-            nextLineLower.indexOf(' ' + kw) !== -1
-          )
-        ) && (foundAbilityScores || foundChallenge || buffer.length > 30));
+        buffer.length > 1000;
       
       if (shouldEnd) {
         console.log(`Ending monster at line ${i}, buffer length: ${buffer.length}`);
@@ -959,12 +1045,17 @@ function extractMonstersFromPDFText(text) {
         const monsterText = buffer.join('\n');
         const parsed = parseStatBlock(monsterText);
         
-        if (parsed.name || parsed.ac || parsed.hp || parsed.cr) {
-          monsters.push({
+        // FINAL CHECK: Accept anything we captured!
+        let isAcceptable = true;
+        
+        if (isAcceptable) {
+          extractedMonsters.push({
             rawText: monsterText,
             parsed: parsed
           });
-          console.log('Added monster:', parsed.name || 'Unknown');
+          console.log('✅✅✅ Added REAL monster:', parsed.name || 'Unknown');
+        } else {
+          console.log('❌❌❌ REJECTED - not a real monster:', parsed);
         }
         
         buffer = [];
@@ -979,40 +1070,33 @@ function extractMonstersFromPDFText(text) {
   if (foundPotentialStart && buffer.length > 0) {
     const monsterText = buffer.join('\n');
     const parsed = parseStatBlock(monsterText);
-    if (parsed.name || parsed.ac || parsed.hp || parsed.cr) {
-      monsters.push({
+    
+    // FINAL CHECK: Accept anything we captured!
+    let isAcceptable = true;
+    
+    if (isAcceptable) {
+      extractedMonsters.push({
         rawText: monsterText,
         parsed: parsed
       });
     }
   }
   
-  console.log(`extractMonstersFromPDFText: Found ${monsters.length} monsters total`);
+  console.log(`extractMonstersFromPDFText: Found ${extractedMonsters.length} monsters total`);
   
-  const uniqueMonsters = [];
-  const seenNames = new Set();
-  for (const m of monsters) {
-    const name = (m.parsed?.name || '').toLowerCase().trim();
-    if (name && !seenNames.has(name)) {
-      seenNames.add(name);
-      uniqueMonsters.push(m);
-    } else if (!name) {
-      uniqueMonsters.push(m);
-    }
-  }
+  // NO DEDUPLICATION - SHOW EVERYTHING!
+  const uniqueMonsters = extractedMonsters;
   
   return uniqueMonsters;
 }
 
 function saveExtractedMonstersToGlobal(monsters) {
   try {
+    // SAVE EVERYTHING - NO DUPLICATE CHECKING!
     const existing = JSON.parse(localStorage.getItem('dnd_extension_extracted_monsters') || '[]');
-    const newMonsters = monsters.filter(m => 
-      !existing.some(e => e.parsed?.name === m.parsed?.name)
-    );
-    const all = [...existing, ...newMonsters];
+    const all = [...existing, ...monsters];
     localStorage.setItem('dnd_extension_extracted_monsters', JSON.stringify(all));
-    return newMonsters.length;
+    return monsters.length;
   } catch (e) {
     console.error('Failed to save extracted monsters:', e);
     return 0;
@@ -2621,6 +2705,12 @@ export function searchItems(query) {
             <button id="pdf-upload-btn" style="padding: 8px 16px; background: #4a90d9; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
                 Select PDF File
             </button>
+            <div style="margin-top: 8px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+              <button id="ocr-image-btn" style="padding: 6px 12px; background: #ff6b6b; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">
+                📷 OCR Image (PNG/JPG)
+              </button>
+              <input type="file" id="ocr-image-input" style="display: none;" accept="image/*">
+            </div>
             <div id="pdf-upload-status" style="margin-top: 8px; font-size: 0.8em; color: #666;"></div>
             <div id="pdf-extracted-monsters" style="margin-top: 10px; display: none; text-align: left; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 4px; padding: 8px;">
             </div>
@@ -3542,7 +3632,12 @@ export function searchItems(query) {
             const showBtn = document.getElementById('show-extracted-text-btn');
             if (showBtn) {
               showBtn.addEventListener('click', () => {
-                const sample = text.substring(0, 2000);
+                // Filter out our markers for clean display
+                let cleanText = text;
+                cleanText = cleanText.replace(/---TOP_OF_PAGE---/g, '');
+                cleanText = cleanText.replace(/---PAGE_BREAK---/g, '');
+                cleanText = cleanText.replace(/\n\s*\n\s*\n/g, '\n\n'); // Remove extra newlines
+                const sample = cleanText.trim().substring(0, 2000);
                 alert('Extracted text sample (first 2000 chars):\n\n' + sample);
               });
             }
@@ -3597,7 +3692,12 @@ export function searchItems(query) {
             showFullBtn.addEventListener('click', () => {
               if (!textAreaVisible) {
                 textAreaElement = document.createElement('textarea');
-                textAreaElement.value = text;
+                // Filter out our markers for clean display
+                let cleanText = text;
+                cleanText = cleanText.replace(/---TOP_OF_PAGE---/g, '');
+                cleanText = cleanText.replace(/---PAGE_BREAK---/g, '');
+                cleanText = cleanText.replace(/\n\s*\n\s*\n/g, '\n\n'); // Remove extra newlines
+                textAreaElement.value = cleanText.trim();
                 textAreaElement.style.width = '100%';
                 textAreaElement.style.height = '400px';
                 textAreaElement.style.marginTop = '10px';
