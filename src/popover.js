@@ -597,10 +597,15 @@ function parseStatBlock(text) {
   // Normalize newlines and extra spaces
   const normalized = text.replace(/\r\n/g, '\n').trim();
   
-  // 1. Parse Name (first line, usually)
-  const firstLine = normalized.split('\n')[0].trim();
-  if (firstLine && !firstLine.toLowerCase().includes('hp') && !firstLine.toLowerCase().includes('ac') && !firstLine.match(/^(str|dex|con|int|wis|cha)/i)) {
-    result.name = firstLine;
+  console.log("parseStatBlock - normalized text:", normalized);
+  
+  // 1. Parse Name (first non-empty line, usually)
+  const lines = normalized.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  if (lines.length > 0) {
+    const firstLine = lines[0];
+    if (!firstLine.toLowerCase().includes('hp') && !firstLine.toLowerCase().includes('ac') && !firstLine.match(/^(str|dex|con|int|wis|cha)/i)) {
+      result.name = firstLine;
+    }
   }
   
   // 2. Parse Type (like "Medium Humanoid, Lawful Evil")
@@ -609,23 +614,25 @@ function parseStatBlock(text) {
     result.type = typeMatch[0].trim();
   }
   
-  // 3. Parse AC
-  const acMatch = normalized.match(/AC\s+(\d+)/i);
+  // 3. Parse AC - multiple formats
+  const acMatch = normalized.match(/(?:Armor Class|AC)\s*(?:\(.*?\)\s*)?(\d+)/i);
   if (acMatch) {
     result.ac = parseInt(acMatch[1], 10);
   }
   
-  // 4. Parse HP
-  const hpMatch = normalized.match(/HP\s+(\d+)/i);
+  // 4. Parse HP - multiple formats
+  const hpMatch = normalized.match(/(?:Hit Points|HP)\s*(?:\(.*?\)\s*)?(\d+)/i);
   if (hpMatch) {
     result.hp = parseInt(hpMatch[1], 10);
   }
   
-  // 5. Parse CR
-  const crMatch = normalized.match(/Challenge\s+([0-9\/\-—]+)/i);
+  // 5. Parse CR - multiple formats
+  const crMatch = normalized.match(/(?:Challenge|CR)\s*(?:\d+ XP)?\s*([0-9\/\-—]+)/i);
   if (crMatch) {
     result.cr = crMatch[1].trim();
   }
+  
+  console.log("parseStatBlock - result:", result);
   
   // 6. Abilities are parsed by existing parseAbilities function
   
@@ -3482,11 +3489,18 @@ export function searchItems(query) {
       const refreshBtn = document.getElementById('refresh-stats-btn');
       if (refreshBtn) {
         refreshBtn.addEventListener('click', async () => {
+          console.log("Refresh button clicked!");
+          console.log("Description to use:", descriptionToUse);
+          
           if (!confirm(`Refresh stats for ${data.name} using the description/stat block? This will update HP, AC, CR, and type!`)) {
             return;
           }
+          
           const parsed = parseStatBlock(descriptionToUse || '');
+          console.log("Parsed stat block:", parsed);
+          
           let updated = false;
+          const changes = [];
           
           const customs = getCustomMonsters();
           const idx = customs.findIndex(m => m.name === data.name);
@@ -3496,22 +3510,30 @@ export function searchItems(query) {
           }
           
           const monster = customs[idx];
+          console.log("Current monster stats:", { hp: monster.hp, ac: monster.ac, cr: monster.cr, type: monster.type });
+          
           if (parsed.hp !== undefined && parsed.hp !== monster.hp) {
+            changes.push(`HP: ${monster.hp} → ${parsed.hp}`);
             monster.hp = parsed.hp;
             updated = true;
           }
           if (parsed.ac !== undefined && parsed.ac !== monster.ac) {
+            changes.push(`AC: ${monster.ac} → ${parsed.ac}`);
             monster.ac = parsed.ac;
             updated = true;
           }
           if (parsed.cr && parsed.cr !== monster.cr) {
+            changes.push(`CR: ${monster.cr} → ${parsed.cr}`);
             monster.cr = parsed.cr;
             updated = true;
           }
           if (parsed.type && parsed.type !== monster.type) {
+            changes.push(`Type: ${monster.type} → ${parsed.type}`);
             monster.type = parsed.type;
             updated = true;
           }
+          
+          console.log("Changes detected:", changes);
           
           if (updated) {
             localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customs));
@@ -3529,7 +3551,7 @@ export function searchItems(query) {
               });
 
               if (toUpdate.length > 0) {
-                if (confirm(`Update ${toUpdate.length} existing tokens on the map with these new stats?`)) {
+                if (confirm(`Update ${toUpdate.length} existing tokens on the map with these new stats?\n\nChanges:\n${changes.join('\n')}`)) {
                   await OBR.scene.items.updateItems(toUpdate.map(i => i.id), (items) => {
                     for (let item of items) {
                       if (!item.metadata) item.metadata = {};
@@ -3563,13 +3585,13 @@ export function searchItems(query) {
               console.error("Failed to sync tokens:", e);
             }
             
-            alert(`Stats refreshed for ${data.name}!`);
+            alert(`Stats refreshed for ${data.name}!\n\nChanges:\n${changes.join('\n')}`);
             // Re-render the stats view to show updated data
             const itemIdForRefresh = itemId; // Capture itemId from outer scope
             const updatedData = customs[idx]; // Get the updated monster object
             showStats(updatedData, itemIdForRefresh);
           } else {
-            alert("No changes detected—stats are already up to date!");
+            alert("No changes detected—stats are already up to date!\n\nCheck console logs for debugging info.");
           }
         });
       }
