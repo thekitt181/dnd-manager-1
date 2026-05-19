@@ -2286,12 +2286,12 @@ export function searchItems(query) {
         </div>
       </div>
 
-      <div id="stats-view" style="display: none; height: 100%; overflow-y: auto;">
+      <div id="stats-view" style="display: none; height: 100%; overflow-y: auto; background: white; padding: 10px;">
         <button id="back-btn" style="margin-bottom: 10px;">&larr; Back to Search</button>
         <div id="stats-content"></div>
       </div>
 
-      <div id="editor-view" style="display: none; height: 100%; overflow-y: auto;">
+      <div id="editor-view" style="display: none; height: 100%; overflow-y: auto; background: white; padding: 10px;">
         <button id="editor-cancel-btn" style="margin-bottom: 10px;">&larr; Cancel</button>
         <h3 style="margin-top: 0;"><span id="editor-title-action">Create</span> <span id="editor-title-type">Monster</span></h3>
         
