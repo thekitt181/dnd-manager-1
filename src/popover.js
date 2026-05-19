@@ -3465,6 +3465,11 @@ export function searchItems(query) {
             <div id="actions-wrapper"></div>
           </div>
           <p><em>${data.source || 'Unknown Source'}</em></p>
+          <div style="margin-bottom: 10px;">
+            <button id="refresh-stats-btn" style="padding: 5px 10px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              🔄 Refresh Stats from Description
+            </button>
+          </div>
           <hr>
           <div style="white-space: pre-wrap; font-family: monospace; background: #333; padding: 10px; border-radius: 5px;">
             ${descriptionToUse || 'No detailed stats available.'}
@@ -3472,6 +3477,103 @@ export function searchItems(query) {
         `;
     }
 
+    // Refresh Stats Listener (for Monsters)
+    if (!isSpell && !isItem) {
+      const refreshBtn = document.getElementById('refresh-stats-btn');
+      if (refreshBtn) {
+        refreshBtn.addEventListener('click', async () => {
+          if (!confirm(`Refresh stats for ${data.name} using the description/stat block? This will update HP, AC, CR, and type!`)) {
+            return;
+          }
+          const parsed = parseStatBlock(descriptionToUse || '');
+          let updated = false;
+          
+          const customs = getCustomMonsters();
+          const idx = customs.findIndex(m => m.name === data.name);
+          if (idx === -1) {
+            alert("This is a built-in monster, not a custom one. Edit it to refresh stats!");
+            return;
+          }
+          
+          const monster = customs[idx];
+          if (parsed.hp !== undefined && parsed.hp !== monster.hp) {
+            monster.hp = parsed.hp;
+            updated = true;
+          }
+          if (parsed.ac !== undefined && parsed.ac !== monster.ac) {
+            monster.ac = parsed.ac;
+            updated = true;
+          }
+          if (parsed.cr && parsed.cr !== monster.cr) {
+            monster.cr = parsed.cr;
+            updated = true;
+          }
+          if (parsed.type && parsed.type !== monster.type) {
+            monster.type = parsed.type;
+            updated = true;
+          }
+          
+          if (updated) {
+            localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customs));
+            saveToBackend();
+            
+            // Update existing tokens on the map, just like when saving an edited monster
+            try {
+              const items = await OBR.scene.items.getItems();
+              const toUpdate = items.filter(item => {
+                if (item.type !== 'IMAGE') return false;
+                const metaName = item.metadata?.name;
+                if (metaName && metaName === data.name) return true;
+                const text = item.text?.plainText || "";
+                return text.startsWith(data.name);
+              });
+
+              if (toUpdate.length > 0) {
+                if (confirm(`Update ${toUpdate.length} existing tokens on the map with these new stats?`)) {
+                  await OBR.scene.items.updateItems(toUpdate.map(i => i.id), (items) => {
+                    for (let item of items) {
+                      if (!item.metadata) item.metadata = {};
+                      item.metadata.hp = monster.hp;
+                      item.metadata.ac = monster.ac;
+                      item.metadata.name = monster.name;
+                      
+                      const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+                      const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+                      const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+
+                      let newLabel = "";
+                      if (!hideName) newLabel += monster.name;
+                      
+                      let statsLine = "";
+                      if (!hideHP) statsLine += `HP: ${monster.hp}`;
+                      if (!hideHP && !hideAC) statsLine += " ";
+                      if (!hideAC) statsLine += `AC: ${monster.ac}`;
+                      
+                      if (statsLine) {
+                        if (newLabel) newLabel += "\n";
+                        newLabel += statsLine;
+                      }
+                      if (!item.text) item.text = { plainText: "" };
+                      item.text.plainText = newLabel;
+                    }
+                  });
+                }
+              }
+            } catch (e) {
+              console.error("Failed to sync tokens:", e);
+            }
+            
+            alert(`Stats refreshed for ${data.name}!`);
+            // Re-render the stats view to show updated data
+            const itemIdForRefresh = itemId; // Capture itemId from outer scope
+            const updatedData = customs[idx]; // Get the updated monster object
+            showStats(updatedData, itemIdForRefresh);
+          } else {
+            alert("No changes detected—stats are already up to date!");
+          }
+        });
+      }
+    }
 
     // Share Description Listener
     const shareBtn = document.getElementById('share-description-btn');
