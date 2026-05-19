@@ -45,6 +45,56 @@ if (mongoUri) {
 
 // Fallback to local file if no DB (Ephemeral on Render!)
 const DATA_FILE = path.join(__dirname, 'data.json');
+const LOGS_FILE = path.join(__dirname, 'action-logs.json');
+let logsCollection = null;
+
+if (mongoUri) {
+  const client = new MongoClient(mongoUri, {
+    serverSelectionTimeoutMS: 5000,
+    family: 4, // Force IPv4 to avoid potential IPv6 issues on some platforms
+  });
+  client.connect()
+    .then(() => {
+      console.log('Connected to MongoDB for logs');
+      const db = client.db('owlbear-extension');
+      logsCollection = db.collection('action-logs');
+    })
+    .catch(err => {
+      console.error('MongoDB logs connection error:', err);
+    });
+}
+
+// Helper to get logs
+async function getLogs() {
+  if (logsCollection) {
+    const logs = await logsCollection.find({}).sort({ timestamp: -1 }).limit(1000).toArray();
+    return logs;
+  } else {
+    if (fs.existsSync(LOGS_FILE)) {
+      return JSON.parse(fs.readFileSync(LOGS_FILE, 'utf8'));
+    }
+    return [];
+  }
+}
+
+// Helper to save log
+async function saveLog(logEntry) {
+  const entry = {
+    ...logEntry,
+    timestamp: new Date(),
+    id: Date.now() + '_' + Math.random().toString(36).substr(2, 9)
+  };
+  
+  if (logsCollection) {
+    await logsCollection.insertOne(entry);
+  } else {
+    const logs = await getLogs();
+    logs.unshift(entry);
+    // Keep only last 1000 logs to prevent file from getting too big
+    const trimmedLogs = logs.slice(0, 1000);
+    fs.writeFileSync(LOGS_FILE, JSON.stringify(trimmedLogs, null, 2));
+  }
+}
 
 // Helper to get data
 async function getData() {
@@ -96,6 +146,38 @@ app.post('/api/data', async (req, res) => {
         
         await saveData({ monsters, items, deleted: deleted || [], images: images || {}, imagesData: imagesData || {}, lastUpdated: new Date() });
         res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Action Logging Endpoints
+app.post('/api/log-action', async (req, res) => {
+    try {
+        const { action, user, data } = req.body;
+        if (!action) {
+            return res.status(400).json({ error: 'Action is required' });
+        }
+        
+        const logEntry = {
+            action,
+            user: user || 'Anonymous',
+            ip: req.ip || req.connection.remoteAddress || 'Unknown',
+            data: data || null
+        };
+        
+        await saveLog(logEntry);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Log action failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/logs', async (req, res) => {
+    try {
+        const logs = await getLogs();
+        res.json({ logs });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

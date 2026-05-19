@@ -3,6 +3,37 @@ import items from './items.json';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
 import * as pdfjsLib from 'pdfjs-dist';
 
+// Helper to log user actions to server
+async function logAction(action, data = null) {
+  try {
+    // Get a user identifier (from localStorage if available, or generate a random one)
+    let userId = localStorage.getItem('dnd_extension_user_id');
+    if (!userId) {
+      userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('dnd_extension_user_id', userId);
+    }
+    
+    const response = await fetch('/api/log-action', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        action,
+        user: userId,
+        data
+      })
+    });
+    
+    if (!response.ok) {
+      console.warn('Failed to log action:', response.statusText);
+    }
+  } catch (err) {
+    // Don't show errors to user for logging failures
+    console.warn('Failed to log action:', err);
+  }
+}
+
 const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
 
@@ -760,11 +791,18 @@ function saveCustomMonster(monster) {
     try {
         const list = getCustomMonsters();
         const index = list.findIndex(m => m.name === monster.name);
-        if (index >= 0) list[index] = monster;
+        const isUpdate = index >= 0;
+        if (isUpdate) list[index] = monster;
         else list.push(monster);
         localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(list));
         saveToBackend(); // Sync to backend
         restoreItem(monster.name);
+        
+        logAction(isUpdate ? 'update_custom_monster' : 'create_custom_monster', { 
+          monsterName: monster.name, 
+          monsterCr: monster.cr 
+        });
+        
         return true;
     } catch (e) {
         console.error("Failed to save custom monster:", e);
@@ -1037,6 +1075,7 @@ function getPlaceholderImage(name, type = 'monster') {
 }
 
 export async function addMonsterToScene(monster) {
+  logAction('add_monster_to_scene', { monsterName: monster.name, monsterCr: monster.cr });
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   // Use getStoredImage for case-insensitive lookup
   let imageUrl = getStoredImage('monster', monster.name) || monster.image;
@@ -2232,13 +2271,14 @@ export function searchItems(query) {
         <div id="results" style="overflow-y: auto; flex: 1;"></div>
         
         <div style="margin-top: 5px; border-top: 1px solid #eee; padding-top: 5px; display: flex; flex-wrap: wrap; gap: 5px; justify-content: space-between; align-items: center;">
-            <div style="display: flex; gap: 5px;">
+            <div style="display: flex; gap: 5px; flex-wrap: wrap;">
                 <button id="backup-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Backup Data</button>
                 <button id="sync-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;" title="Force sync with online database">Force Sync</button>
                 <button id="import-pdf-btn" style="font-size: 0.8em; cursor: pointer; background: #007bff; color: white; border: 1px solid #0056b3; border-radius: 3px; padding: 5px 8px;">Import PDF</button>
                 <input type="file" id="import-pdf-input" style="display: none" accept=".pdf">
+                <button id="view-logs-btn" style="font-size: 0.8em; cursor: pointer; background: #6c757d; color: white; border: 1px solid #545b62; border-radius: 3px; padding: 5px 8px;">View Logs</button>
             </div>
-            <span style="font-size: 0.8em; color: #888;">v1.3.0</span>
+            <span style="font-size: 0.8em; color: #888;">v1.4.0</span>
             <div style="display: flex; gap: 5px;">
                 <button id="restore-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Restore Data</button>
                 <button id="export-source-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #007bff; color: #007bff; border-radius: 3px; padding: 5px 8px;" title="Download JSON files to update source code for hosting">Export Source</button>
@@ -3000,6 +3040,65 @@ export function searchItems(query) {
       });
   }
 
+  // View Logs Logic
+  const viewLogsBtn = document.getElementById('view-logs-btn');
+  if (viewLogsBtn) {
+    viewLogsBtn.addEventListener('click', async () => {
+      try {
+        const response = await fetch('/api/logs');
+        const { logs } = await response.json();
+        
+        if (!logs || logs.length === 0) {
+          alert('No logs found yet!');
+          return;
+        }
+        
+        // Create a simple HTML table or text view
+        const logsHtml = `
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Action Logs</title>
+              <style>
+                body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+                h1 { color: #333; }
+                .log-entry { background: white; padding: 15px; margin: 1px solid #ddd; border-radius: 5px; margin-bottom: 10px; }
+                .log-timestamp { color: #666; font-size: 0.9em; }
+                .log-action { font-weight: bold; color: #007bff; }
+                .log-user { color: #6c757d; }
+                .log-data { margin-top: 8px; background: #f8f9fa; padding: 8px; border-radius: 3px; font-family: monospace; font-size: 0.9em; }
+              </style>
+            </head>
+            <body>
+              <h1>Action Logs</h1>
+              <div id="logs-container">
+                ${logs.map(log => `
+                  <div class="log-entry">
+                    <div class="log-timestamp">${new Date(log.timestamp).toLocaleString()}</div>
+                    <div class="log-action">Action: ${log.action}</div>
+                    <div class="log-user">User: ${log.user}</div>
+                    <div class="log-ip">IP: ${log.ip}</div>
+                    ${log.data ? `<div class="log-data">Data: ${JSON.stringify(log.data, null, 2)}</div>` : ''}
+                  </div>
+                `).join('')}
+              </div>
+            </body>
+          </html>
+        `;
+        
+        // Open in new tab
+        const blob = new Blob([logsHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        
+      } catch (err) {
+        console.error('Failed to load logs:', err);
+        alert('Failed to load logs: ' + err.message);
+      }
+    });
+  }
+
   // Export Source Logic (for Hosting)
   const exportSourceBtn = document.getElementById('export-source-btn');
   if (exportSourceBtn) {
@@ -3254,6 +3353,8 @@ export function searchItems(query) {
     importPdfInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
+      
+      logAction('import_pdf', { fileName: file.name, fileSize: file.size });
       
       importPdfBtn.innerText = "Importing...";
       importPdfBtn.disabled = true;
@@ -3758,6 +3859,7 @@ export function searchItems(query) {
         refreshBtn.addEventListener('click', async () => {
           console.log("Refresh button clicked!");
           console.log("Description to use:", descriptionToUse);
+          logAction('refresh_monster_stats', { monsterName: data.name });
           
           if (!confirm(`Refresh stats for ${data.name} using the description/stat block? This will update HP, AC, CR, and type!`)) {
             return;
