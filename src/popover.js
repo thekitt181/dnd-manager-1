@@ -2388,19 +2388,37 @@ export function searchItems(query) {
 
                       const hp = item.metadata.hp;
                       const ac = item.metadata.ac;
-                      const cr = item.metadata.cr;
+                      let cr = item.metadata.cr;
                       const type = item.metadata.type;
+
+                      console.log("updateAllTokensOnMap - token cr metadata:", cr);
+
+                      // If token is missing cr metadata, try to find it in monsters or custom monsters library
+                      if (isMonster && (!cr || cr === "Unknown")) {
+                          const allMonsters = [...monsters, ...getCustomMonsters()];
+                          const libraryMonster = allMonsters.find(m => m.name === name);
+                          if (libraryMonster) {
+                              cr = libraryMonster.cr;
+                              // Also save it back to token's metadata so we don't have to look it up again!
+                              item.metadata.cr = String(cr);
+                              console.log("updateAllTokensOnMap - found cr in library:", cr);
+                          }
+                      }
 
                       let newLabel = "";
                       if (!hName) newLabel += name;
                       
                       if (isMonster) {
                           let statsLine = "";
-                          if (!hHP && hp !== undefined) statsLine += `HP: ${hp}`;
-                          if (!hHP && !hAC && hp !== undefined && ac !== undefined) statsLine += " ";
-                          if (!hAC && ac !== undefined) statsLine += `AC: ${ac}`;
-                          if ((!hHP || !hAC) && !hCR && cr !== undefined) statsLine += " ";
-                          if (!hCR && cr !== undefined) statsLine += `CR: ${cr}`;
+                          const hasHp = !hHP && hp !== undefined;
+                          const hasAc = !hAC && ac !== undefined;
+                          const hasCr = !hCR && cr !== undefined && cr !== "Unknown";
+                          
+                          if (hasHp) statsLine += `HP: ${hp}`;
+                          if (hasHp && hasAc) statsLine += " ";
+                          if (hasAc) statsLine += `AC: ${ac}`;
+                          if ((hasHp || hasAc) && hasCr) statsLine += " ";
+                          if (hasCr) statsLine += `CR: ${cr}`;
                           
                           if (statsLine) {
                               if (newLabel) newLabel += "\n";
@@ -3573,19 +3591,27 @@ export function searchItems(query) {
                       if (!item.metadata) item.metadata = {};
                       item.metadata.hp = monster.hp;
                       item.metadata.ac = monster.ac;
+                      item.metadata.cr = monster.cr;
                       item.metadata.name = monster.name;
                       
                       const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
                       const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
                       const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+                      const hideCR = localStorage.getItem('dnd_extension_hide_cr') === 'true';
 
                       let newLabel = "";
                       if (!hideName) newLabel += monster.name;
                       
                       let statsLine = "";
-                      if (!hideHP) statsLine += `HP: ${monster.hp}`;
-                      if (!hideHP && !hideAC) statsLine += " ";
-                      if (!hideAC) statsLine += `AC: ${monster.ac}`;
+                      const hasHp = !hideHP;
+                      const hasAc = !hideAC;
+                      const hasCr = !hideCR && monster.cr !== undefined && monster.cr !== "Unknown";
+                      
+                      if (hasHp) statsLine += `HP: ${monster.hp}`;
+                      if (hasHp && hasAc) statsLine += " ";
+                      if (hasAc) statsLine += `AC: ${monster.ac}`;
+                      if ((hasHp || hasAc) && hasCr) statsLine += " ";
+                      if (hasCr) statsLine += `CR: ${monster.cr}`;
                       
                       if (statsLine) {
                         if (newLabel) newLabel += "\n";
