@@ -1286,6 +1286,7 @@ export async function addMonsterToScene(monster) {
                    const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
                    const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
                    const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+                   const hideCR = localStorage.getItem('dnd_extension_hide_cr') === 'true';
 
                    let label = "";
                    if (!hideName) label += monster.name;
@@ -1294,6 +1295,8 @@ export async function addMonsterToScene(monster) {
                    if (!hideHP) statsLine += `HP: ${hpValue}`;
                    if (!hideHP && !hideAC) statsLine += " ";
                    if (!hideAC) statsLine += `AC: ${acValue}`;
+                   if ((!hideHP || !hideAC) && !hideCR && monster.cr !== undefined) statsLine += " ";
+                   if (!hideCR && monster.cr !== undefined) statsLine += `CR: ${monster.cr}`;
                    
                    if (statsLine) {
                        if (label) label += "\n";
@@ -2215,6 +2218,9 @@ export function searchItems(query) {
             <label style="font-size: 0.8em; cursor: pointer; color: #333; font-weight: bold;">
                 <input type="checkbox" id="hide-ac-checkbox"> Hide AC
             </label>
+            <label style="font-size: 0.8em; cursor: pointer; color: #333; font-weight: bold;">
+                <input type="checkbox" id="hide-cr-checkbox"> Hide CR
+            </label>
         </div>
 
         <div id="monster-filters" style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px;">
@@ -2339,16 +2345,19 @@ export function searchItems(query) {
   const hideNameCheckbox = document.getElementById('hide-name-checkbox');
   const hideHpCheckbox = document.getElementById('hide-hp-checkbox');
   const hideAcCheckbox = document.getElementById('hide-ac-checkbox');
+  const hideCrCheckbox = document.getElementById('hide-cr-checkbox');
 
   // Load hide settings
   hideNameCheckbox.checked = localStorage.getItem('dnd_extension_hide_name') === 'true';
   hideHpCheckbox.checked = localStorage.getItem('dnd_extension_hide_hp') === 'true';
   hideAcCheckbox.checked = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+  hideCrCheckbox.checked = localStorage.getItem('dnd_extension_hide_cr') === 'true';
 
   const updateAllTokensOnMap = async () => {
       const hName = hideNameCheckbox.checked;
       const hHP = hideHpCheckbox.checked;
       const hAC = hideAcCheckbox.checked;
+      const hCR = hideCrCheckbox.checked;
 
       try {
           const items = await OBR.scene.items.getItems();
@@ -2379,6 +2388,7 @@ export function searchItems(query) {
 
                       const hp = item.metadata.hp;
                       const ac = item.metadata.ac;
+                      const cr = item.metadata.cr;
                       const type = item.metadata.type;
 
                       let newLabel = "";
@@ -2389,6 +2399,8 @@ export function searchItems(query) {
                           if (!hHP && hp !== undefined) statsLine += `HP: ${hp}`;
                           if (!hHP && !hAC && hp !== undefined && ac !== undefined) statsLine += " ";
                           if (!hAC && ac !== undefined) statsLine += `AC: ${ac}`;
+                          if ((!hHP || !hAC) && !hCR && cr !== undefined) statsLine += " ";
+                          if (!hCR && cr !== undefined) statsLine += `CR: ${cr}`;
                           
                           if (statsLine) {
                               if (newLabel) newLabel += "\n";
@@ -2424,6 +2436,10 @@ export function searchItems(query) {
   });
   hideAcCheckbox.addEventListener('change', () => {
       localStorage.setItem('dnd_extension_hide_ac', hideAcCheckbox.checked);
+      updateAllTokensOnMap();
+  });
+  hideCrCheckbox.addEventListener('change', () => {
+      localStorage.setItem('dnd_extension_hide_cr', hideCrCheckbox.checked);
       updateAllTokensOnMap();
   });
 
@@ -4441,6 +4457,8 @@ export function searchItems(query) {
                         const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
                         const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
                         const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+                        const hideCR = localStorage.getItem('dnd_extension_hide_cr') === 'true';
+                        const cr = item.metadata.cr;
 
                         // Try to get name from metadata, fallback to label only if it doesn't look like stats
                         let name = item.metadata.name;
@@ -4459,6 +4477,8 @@ export function searchItems(query) {
                         if (!hideHP) statsLine += `HP: ${newHp}`;
                         if (!hideHP && !hideAC) statsLine += " ";
                         if (!hideAC) statsLine += `AC: ${newAc}`;
+                        if ((!hideHP || !hideAC) && !hideCR && cr !== undefined) statsLine += " ";
+                        if (!hideCR && cr !== undefined) statsLine += `CR: ${cr}`;
                         
                         if (statsLine) {
                             if (newLabel) newLabel += "\n";
