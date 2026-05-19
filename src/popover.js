@@ -3,37 +3,6 @@ import items from './items.json';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Helper to log user actions to server
-async function logAction(action, data = null) {
-  try {
-    // Get a user identifier (from localStorage if available, or generate a random one)
-    let userId = localStorage.getItem('dnd_extension_user_id');
-    if (!userId) {
-      userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-      localStorage.setItem('dnd_extension_user_id', userId);
-    }
-    
-    const response = await fetch('/api/log-action', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        action,
-        user: userId,
-        data
-      })
-    });
-    
-    if (!response.ok) {
-      console.warn('Failed to log action:', response.statusText);
-    }
-  } catch (err) {
-    // Don't show errors to user for logging failures
-    console.warn('Failed to log action:', err);
-  }
-}
-
 const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
 
@@ -791,18 +760,11 @@ function saveCustomMonster(monster) {
     try {
         const list = getCustomMonsters();
         const index = list.findIndex(m => m.name === monster.name);
-        const isUpdate = index >= 0;
-        if (isUpdate) list[index] = monster;
+        if (index >= 0) list[index] = monster;
         else list.push(monster);
         localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(list));
         saveToBackend(); // Sync to backend
         restoreItem(monster.name);
-        
-        logAction(isUpdate ? 'update_custom_monster' : 'create_custom_monster', { 
-          monsterName: monster.name, 
-          monsterCr: monster.cr 
-        });
-        
         return true;
     } catch (e) {
         console.error("Failed to save custom monster:", e);
@@ -1075,7 +1037,6 @@ function getPlaceholderImage(name, type = 'monster') {
 }
 
 export async function addMonsterToScene(monster) {
-  logAction('add_monster_to_scene', { monsterName: monster.name, monsterCr: monster.cr });
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   // Use getStoredImage for case-insensitive lookup
   let imageUrl = getStoredImage('monster', monster.name) || monster.image;
@@ -2271,14 +2232,13 @@ export function searchItems(query) {
         <div id="results" style="overflow-y: auto; flex: 1;"></div>
         
         <div style="margin-top: 5px; border-top: 1px solid #eee; padding-top: 5px; display: flex; flex-wrap: wrap; gap: 5px; justify-content: space-between; align-items: center;">
-            <div style="display: flex; gap: 5px; flex-wrap: wrap;">
+            <div style="display: flex; gap: 5px;">
                 <button id="backup-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Backup Data</button>
                 <button id="sync-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;" title="Force sync with online database">Force Sync</button>
                 <button id="import-pdf-btn" style="font-size: 0.8em; cursor: pointer; background: #007bff; color: white; border: 1px solid #0056b3; border-radius: 3px; padding: 5px 8px;">Import PDF</button>
                 <input type="file" id="import-pdf-input" style="display: none" accept=".pdf">
-                <button id="view-logs-btn" style="font-size: 0.8em; cursor: pointer; background: #6c757d; color: white; border: 1px solid #545b62; border-radius: 3px; padding: 5px 8px;">View Logs</button>
             </div>
-            <span style="font-size: 0.8em; color: #888;">v1.4.0</span>
+            <span style="font-size: 0.8em; color: #888;">v1.3.0</span>
             <div style="display: flex; gap: 5px;">
                 <button id="restore-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Restore Data</button>
                 <button id="export-source-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #007bff; color: #007bff; border-radius: 3px; padding: 5px 8px;" title="Download JSON files to update source code for hosting">Export Source</button>
@@ -2286,12 +2246,12 @@ export function searchItems(query) {
         </div>
       </div>
 
-      <div id="stats-view" style="display: none; height: 100%; overflow-y: auto; background: white; padding: 10px;">
+      <div id="stats-view" style="display: none; height: 100%; overflow-y: auto;">
         <button id="back-btn" style="margin-bottom: 10px;">&larr; Back to Search</button>
         <div id="stats-content"></div>
       </div>
 
-      <div id="editor-view" style="display: none; height: 100%; overflow-y: auto; background: white; padding: 10px;">
+      <div id="editor-view" style="display: none; height: 100%; overflow-y: auto;">
         <button id="editor-cancel-btn" style="margin-bottom: 10px;">&larr; Cancel</button>
         <h3 style="margin-top: 0;"><span id="editor-title-action">Create</span> <span id="editor-title-type">Monster</span></h3>
         
@@ -3040,65 +3000,6 @@ export function searchItems(query) {
       });
   }
 
-  // View Logs Logic
-  const viewLogsBtn = document.getElementById('view-logs-btn');
-  if (viewLogsBtn) {
-    viewLogsBtn.addEventListener('click', async () => {
-      try {
-        const response = await fetch('/api/logs');
-        const { logs } = await response.json();
-        
-        if (!logs || logs.length === 0) {
-          alert('No logs found yet!');
-          return;
-        }
-        
-        // Create a simple HTML table or text view
-        const logsHtml = `
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>Action Logs</title>
-              <style>
-                body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
-                h1 { color: #333; }
-                .log-entry { background: white; padding: 15px; margin: 1px solid #ddd; border-radius: 5px; margin-bottom: 10px; }
-                .log-timestamp { color: #666; font-size: 0.9em; }
-                .log-action { font-weight: bold; color: #007bff; }
-                .log-user { color: #6c757d; }
-                .log-data { margin-top: 8px; background: #f8f9fa; padding: 8px; border-radius: 3px; font-family: monospace; font-size: 0.9em; }
-              </style>
-            </head>
-            <body>
-              <h1>Action Logs</h1>
-              <div id="logs-container">
-                ${logs.map(log => `
-                  <div class="log-entry">
-                    <div class="log-timestamp">${new Date(log.timestamp).toLocaleString()}</div>
-                    <div class="log-action">Action: ${log.action}</div>
-                    <div class="log-user">User: ${log.user}</div>
-                    <div class="log-ip">IP: ${log.ip}</div>
-                    ${log.data ? `<div class="log-data">Data: ${JSON.stringify(log.data, null, 2)}</div>` : ''}
-                  </div>
-                `).join('')}
-              </div>
-            </body>
-          </html>
-        `;
-        
-        // Open in new tab
-        const blob = new Blob([logsHtml], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        
-      } catch (err) {
-        console.error('Failed to load logs:', err);
-        alert('Failed to load logs: ' + err.message);
-      }
-    });
-  }
-
   // Export Source Logic (for Hosting)
   const exportSourceBtn = document.getElementById('export-source-btn');
   if (exportSourceBtn) {
@@ -3189,160 +3090,62 @@ export function searchItems(query) {
   function extractMonstersFromText(text, fileName) {
     const monsters = [];
     
-    // First, normalize the text - remove extra spaces, normalize newlines
-    let normalizedText = text.replace(/\r\n/g, '\n');
-    normalizedText = normalizedText.replace(/[ \t]+/g, ' ');
+    // First, split into potential monster blocks
+    // Look for lines that start with a monster name followed by size/type
+    // This is a heuristic approach - can be improved based on your PDF format
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    let currentMonster = null;
     
-    // First, let's look for common stat block markers to split the text into blocks
-    // Stat blocks usually have:
-    // - AC
-    // - HP
-    // - CR or Challenge
-    // - Size + Type
-    
-    // Let's split the text into potential blocks using common section headers as markers
-    const sectionHeaders = [
-      'TRAITS', 'ACTIONS', 'LEGENDARY ACTIONS', 'REACTIONS', 'SPELLCASTING',
-      'ABILITY SCORES', 'SAVING THROWS', 'SKILLS', 'DAMAGE RESISTANCES',
-      'DAMAGE IMMUNITIES', 'CONDITION IMMUNITIES', 'SENSES', 'LANGUAGES'
-    ];
-    
-    // First, let's find all positions of AC, HP, CR/Challenge
-    const potentialStatBlocks = [];
-    
-    // First, find all matches of "Armor Class" or "AC" followed by a number
-    const acRegex = /(Armor Class|AC)\s*:?\s*(\d+)/gi;
-    let match;
-    
-    // For each AC match, look back and forward to find the full stat block
-    while ((match = acRegex.exec(normalizedText)) !== null) {
-      const acIndex = match.index;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       
-      // Look back up to 500 characters to find the monster name and size/type
-      let startIndex = Math.max(0, acIndex - 1000);
-      let preText = normalizedText.substring(startIndex, acIndex);
+      // Check if this is a monster stat block start (contains size + type)
+      const sizeTypeMatch = line.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\)]+)/i);
       
-      // Look for a size/type line (Small/Medium/Large/Huge/Gargantuan/Tiny followed by type)
-      const sizeTypeRegex = /(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\),]+)/gi;
-      let sizeTypeMatch;
-      let bestSizeTypeMatch = null;
-      let bestSizeTypeIndex = -1;
-      
-      while ((sizeTypeMatch = sizeTypeRegex.exec(preText)) !== null) {
-        const matchIndex = startIndex + sizeTypeMatch.index;
-        if (matchIndex > bestSizeTypeIndex) {
-          bestSizeTypeMatch = sizeTypeMatch;
-          bestSizeTypeIndex = matchIndex;
+      if (sizeTypeMatch) {
+        // If we have a current monster, add it to the list
+        if (currentMonster && currentMonster.name) {
+          monsters.push(currentMonster);
         }
-      }
-      
-      if (bestSizeTypeMatch) {
-        // Now look for the monster name - it's probably in the text before the size/type
-        let nameStartIndex = Math.max(0, bestSizeTypeIndex - 500);
-        let nameText = normalizedText.substring(nameStartIndex, bestSizeTypeIndex).trim();
         
-        // Split nameText into lines and take the last non-empty line as the name
-        const nameLines = nameText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        let monsterName = nameLines.length > 0 ? nameLines[nameLines.length - 1] : "Unknown Monster";
-        
-        // Clean up the name - remove any leading numbers, symbols, etc.
-        monsterName = monsterName.replace(/^[0-9\.\-\–\—\s]+/, '').trim();
-        
-        // Now look for the end of the stat block - usually the next section header
-        let endIndex = normalizedText.length;
-        for (const header of sectionHeaders) {
-          const headerIndex = normalizedText.indexOf(header, acIndex);
-          if (headerIndex !== -1 && headerIndex < endIndex) {
-            endIndex = headerIndex;
+        // Start a new monster - the previous line is probably the name
+        let name = lines[i - 1] || "Unknown Monster";
+        // If name is empty or too short, try to get name from this line or skip
+        if (name.length < 2 || name.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny|HP|AC|CR)/i)) {
+          // Maybe the name is in the current line before size/type?
+          const beforeSizeType = line.split(/(Small|Medium|Large|Huge|Gargantuan|Tiny)/i)[0].trim();
+          if (beforeSizeType.length > 2) {
+            name = beforeSizeType;
+          } else {
+            // Skip this block if we can't find a name
+            currentMonster = null;
+            continue;
           }
         }
         
-        // Extract the full stat block text
-        const fullStatBlockText = normalizedText.substring(bestSizeTypeIndex - 200, endIndex);
-        
-        // Now parse this full stat block with our parseStatBlock function
-        const parsed = parseStatBlock(monsterName + "\n" + fullStatBlockText);
-        
-        const monster = {
-          name: parsed.name || monsterName,
-          hp: parsed.hp,
-          ac: parsed.ac,
-          cr: parsed.cr,
-          type: parsed.type || bestSizeTypeMatch[0],
-          description: fullStatBlockText,
-          source: fileName
+        currentMonster = {
+          name: name,
+          type: line,
+          source: fileName,
+          description: ""
         };
+      } else if (currentMonster) {
+        // Add this line to the current monster's description
+        currentMonster.description += line + "\n";
         
-        // Check if we already have this monster (by name) to avoid duplicates
-        const alreadyExists = monsters.some(m => m.name.toLowerCase() === monster.name.toLowerCase());
-        if (!alreadyExists && monster.name !== "Unknown Monster") {
-          monsters.push(monster);
-        }
+        // Try to parse HP, AC, CR from this line and add to currentMonster
+        const parsed = parseStatBlock(currentMonster.name + "\n" + currentMonster.type + "\n" + currentMonster.description);
+        if (parsed.hp) currentMonster.hp = parsed.hp;
+        if (parsed.ac) currentMonster.ac = parsed.ac;
+        if (parsed.cr) currentMonster.cr = parsed.cr;
+        if (parsed.type) currentMonster.type = parsed.type;
       }
     }
     
-    // Also try a second approach - look for CR/Challenge first
-    const crRegex = /(Challenge Rating|Challenge|CR)\s*:?\s*([0-9\/\-—]+)/gi;
-    while ((match = crRegex.exec(normalizedText)) !== null) {
-      const crIndex = match.index;
-      
-      // Look back up to 1500 characters to find the monster name and size/type
-      let startIndex = Math.max(0, crIndex - 1500);
-      let preText = normalizedText.substring(startIndex, crIndex);
-      
-      // Look for a size/type line
-      const sizeTypeRegex = /(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\),]+)/gi;
-      let sizeTypeMatch;
-      let bestSizeTypeMatch = null;
-      let bestSizeTypeIndex = -1;
-      
-      while ((sizeTypeMatch = sizeTypeRegex.exec(preText)) !== null) {
-        const matchIndex = startIndex + sizeTypeMatch.index;
-        if (matchIndex > bestSizeTypeIndex) {
-          bestSizeTypeMatch = sizeTypeMatch;
-          bestSizeTypeIndex = matchIndex;
-        }
-      }
-      
-      if (bestSizeTypeMatch) {
-        // Now look for the monster name
-        let nameStartIndex = Math.max(0, bestSizeTypeIndex - 500);
-        let nameText = normalizedText.substring(nameStartIndex, bestSizeTypeIndex).trim();
-        const nameLines = nameText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        let monsterName = nameLines.length > 0 ? nameLines[nameLines.length - 1] : "Unknown Monster";
-        monsterName = monsterName.replace(/^[0-9\.\-\–\—\s]+/, '').trim();
-        
-        // Now look for the end of the stat block
-        let endIndex = normalizedText.length;
-        for (const header of sectionHeaders) {
-          const headerIndex = normalizedText.indexOf(header, crIndex);
-          if (headerIndex !== -1 && headerIndex < endIndex) {
-            endIndex = headerIndex;
-          }
-        }
-        
-        const fullStatBlockText = normalizedText.substring(bestSizeTypeIndex - 200, endIndex);
-        const parsed = parseStatBlock(monsterName + "\n" + fullStatBlockText);
-        
-        const monster = {
-          name: parsed.name || monsterName,
-          hp: parsed.hp,
-          ac: parsed.ac,
-          cr: parsed.cr,
-          type: parsed.type || bestSizeTypeMatch[0],
-          description: fullStatBlockText,
-          source: fileName
-        };
-        
-        const alreadyExists = monsters.some(m => m.name.toLowerCase() === monster.name.toLowerCase());
-        if (!alreadyExists && monster.name !== "Unknown Monster") {
-          monsters.push(monster);
-        }
-      }
+    // Add the last monster
+    if (currentMonster && currentMonster.name) {
+      monsters.push(currentMonster);
     }
-    
-    // Sort the monsters by name
-    monsters.sort((a, b) => a.name.localeCompare(b.name));
     
     return monsters;
   }
@@ -3353,8 +3156,6 @@ export function searchItems(query) {
     importPdfInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
-      
-      logAction('import_pdf', { fileName: file.name, fileSize: file.size });
       
       importPdfBtn.innerText = "Importing...";
       importPdfBtn.disabled = true;
@@ -3859,7 +3660,6 @@ export function searchItems(query) {
         refreshBtn.addEventListener('click', async () => {
           console.log("Refresh button clicked!");
           console.log("Description to use:", descriptionToUse);
-          logAction('refresh_monster_stats', { monsterName: data.name });
           
           if (!confirm(`Refresh stats for ${data.name} using the description/stat block? This will update HP, AC, CR, and type!`)) {
             return;
