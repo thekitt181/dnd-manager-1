@@ -1,6 +1,7 @@
 import monsters from './monsters.json';
 import items from './items.json';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
+import * as pdfjsLib from 'pdfjs-dist';
 
 const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
@@ -2230,13 +2231,18 @@ export function searchItems(query) {
 
         <div id="results" style="overflow-y: auto; flex: 1;"></div>
         
-        <div style="margin-top: 5px; border-top: 1px solid #eee; padding-top: 5px; display: flex; justify-content: space-between; align-items: center;">
-            <button id="backup-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Backup Data</button>
-            <button id="sync-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;" title="Force sync with online database">Force Sync</button>
+        <div style="margin-top: 5px; border-top: 1px solid #eee; padding-top: 5px; display: flex; flex-wrap: wrap; gap: 5px; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: 5px;">
+                <button id="backup-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Backup Data</button>
+                <button id="sync-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;" title="Force sync with online database">Force Sync</button>
+                <button id="import-pdf-btn" style="font-size: 0.8em; cursor: pointer; background: #007bff; color: white; border: 1px solid #0056b3; border-radius: 3px; padding: 5px 8px;">Import PDF</button>
+                <input type="file" id="import-pdf-input" style="display: none" accept=".pdf">
+            </div>
             <span style="font-size: 0.8em; color: #888;">v1.3.0</span>
-            <button id="restore-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Restore Data</button>
-            <button id="export-source-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #007bff; color: #007bff; border-radius: 3px; padding: 5px 8px;" title="Download JSON files to update source code for hosting">Export Source</button>
-            <input type="file" id="restore-file-input" style="display: none" accept=".json">
+            <div style="display: flex; gap: 5px;">
+                <button id="restore-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Restore Data</button>
+                <button id="export-source-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #007bff; color: #007bff; border-radius: 3px; padding: 5px 8px;" title="Download JSON files to update source code for hosting">Export Source</button>
+                <input type="file" id="restore-file-input" style="display: none" accept=".json">
         </div>
       </div>
 
@@ -3057,6 +3063,135 @@ export function searchItems(query) {
               URL.revokeObjectURL(iUrl);
           }, 500);
       });
+  }
+
+  // PDF Import Logic
+  const importPdfBtn = document.getElementById('import-pdf-btn');
+  const importPdfInput = document.getElementById('import-pdf-input');
+
+  // Set up pdfjs worker
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+  async function extractTextFromPdf(file) {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+    let fullText = "";
+    
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map(item => item.str).join(" ");
+      fullText += pageText + "\n\n";
+    }
+    
+    return fullText;
+  }
+
+  function extractMonstersFromText(text, fileName) {
+    const monsters = [];
+    
+    // First, split into potential monster blocks
+    // Look for lines that start with a monster name followed by size/type
+    // This is a heuristic approach - can be improved based on your PDF format
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    let currentMonster = null;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Check if this is a monster stat block start (contains size + type)
+      const sizeTypeMatch = line.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\)]+)/i);
+      
+      if (sizeTypeMatch) {
+        // If we have a current monster, add it to the list
+        if (currentMonster && currentMonster.name) {
+          monsters.push(currentMonster);
+        }
+        
+        // Start a new monster - the previous line is probably the name
+        let name = lines[i - 1] || "Unknown Monster";
+        // If name is empty or too short, try to get name from this line or skip
+        if (name.length < 2 || name.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny|HP|AC|CR)/i)) {
+          // Maybe the name is in the current line before size/type?
+          const beforeSizeType = line.split(/(Small|Medium|Large|Huge|Gargantuan|Tiny)/i)[0].trim();
+          if (beforeSizeType.length > 2) {
+            name = beforeSizeType;
+          } else {
+            // Skip this block if we can't find a name
+            currentMonster = null;
+            continue;
+          }
+        }
+        
+        currentMonster = {
+          name: name,
+          type: line,
+          source: fileName,
+          description: ""
+        };
+      } else if (currentMonster) {
+        // Add this line to the current monster's description
+        currentMonster.description += line + "\n";
+        
+        // Try to parse HP, AC, CR from this line and add to currentMonster
+        const parsed = parseStatBlock(currentMonster.name + "\n" + currentMonster.type + "\n" + currentMonster.description);
+        if (parsed.hp) currentMonster.hp = parsed.hp;
+        if (parsed.ac) currentMonster.ac = parsed.ac;
+        if (parsed.cr) currentMonster.cr = parsed.cr;
+        if (parsed.type) currentMonster.type = parsed.type;
+      }
+    }
+    
+    // Add the last monster
+    if (currentMonster && currentMonster.name) {
+      monsters.push(currentMonster);
+    }
+    
+    return monsters;
+  }
+
+  if (importPdfBtn && importPdfInput) {
+    importPdfBtn.addEventListener('click', () => importPdfInput.click());
+    
+    importPdfInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      importPdfBtn.innerText = "Importing...";
+      importPdfBtn.disabled = true;
+      
+      try {
+        console.log("Importing PDF:", file.name);
+        const pdfText = await extractTextFromPdf(file);
+        console.log("Extracted PDF text (first 2000 chars):", pdfText.substring(0, 2000));
+        
+        const extractedMonsters = extractMonstersFromText(pdfText, file.name);
+        console.log("Extracted monsters:", extractedMonsters);
+        
+        if (extractedMonsters.length === 0) {
+          alert("No monsters found in PDF. The PDF format might not be supported yet.");
+        } else {
+          const confirmMsg = `Found ${extractedMonsters.length} potential monster(s) in the PDF:\n\n${extractedMonsters.map(m => `- ${m.name}`).join('\n')}\n\nImport them as custom monsters?`;
+          if (confirm(confirmMsg)) {
+            let importedCount = 0;
+            for (const monster of extractedMonsters) {
+              if (saveCustomMonster(monster)) {
+                importedCount++;
+              }
+            }
+            alert(`Successfully imported ${importedCount} monster(s)!`);
+            renderResults(input.value);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to import PDF:", err);
+        alert("Failed to import PDF: " + err.message);
+      } finally {
+        importPdfBtn.innerText = "Import PDF";
+        importPdfBtn.disabled = false;
+        importPdfInput.value = ""; // Clear the input
+      }
+    });
   }
 
   const dragHandle = document.getElementById('drag-handle');
