@@ -589,6 +589,71 @@ function parseCR(crString) {
   return parseFloat(str);
 }
 
+// Helper: Parse full stat block text
+function parseStatBlock(text) {
+  if (!text) return {};
+  const result = {};
+  
+  // Normalize newlines and extra spaces
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  
+  // 1. Parse Name (first line, usually)
+  const firstLine = normalized.split('\n')[0].trim();
+  if (firstLine && !firstLine.toLowerCase().includes('hp') && !firstLine.toLowerCase().includes('ac') && !firstLine.match(/^(str|dex|con|int|wis|cha)/i)) {
+    result.name = firstLine;
+  }
+  
+  // 2. Parse Type (like "Medium Humanoid, Lawful Evil")
+  const typeMatch = normalized.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s]+?)(?:,|$)/i);
+  if (typeMatch) {
+    result.type = typeMatch[0].trim();
+  }
+  
+  // 3. Parse AC
+  const acMatch = normalized.match(/AC\s+(\d+)/i);
+  if (acMatch) {
+    result.ac = parseInt(acMatch[1], 10);
+  }
+  
+  // 4. Parse HP
+  const hpMatch = normalized.match(/HP\s+(\d+)/i);
+  if (hpMatch) {
+    result.hp = parseInt(hpMatch[1], 10);
+  }
+  
+  // 5. Parse CR
+  const crMatch = normalized.match(/Challenge\s+([0-9\/\-—]+)/i);
+  if (crMatch) {
+    result.cr = crMatch[1].trim();
+  }
+  
+  // 6. Abilities are parsed by existing parseAbilities function
+  
+  return result;
+}
+
+// Helper to auto-fill form fields from stat block
+function autoFillFromStatBlock() {
+  const text = editorDesc.value;
+  const parsed = parseStatBlock(text);
+  
+  if (parsed.name && !editorName.value) {
+    editorName.value = parsed.name;
+  }
+  if (parsed.type && !editorType.value) {
+    editorType.value = parsed.type;
+  }
+  if (parsed.ac !== undefined && !editorAc.value) {
+    editorAc.value = parsed.ac;
+  }
+  if (parsed.hp !== undefined && !editorHp.value) {
+    editorHp.value = parsed.hp;
+  }
+  if (parsed.cr && !editorCr.value) {
+    editorCr.value = parsed.cr;
+  }
+}
+
 // Custom Data Helpers
 function getCustomMonsters() {
     try { return JSON.parse(localStorage.getItem('dnd_extension_custom_monsters') || '[]'); } catch (e) { return []; }
@@ -2439,7 +2504,10 @@ export function searchItems(query) {
       }
   };
 
-  if (editorDesc) editorDesc.addEventListener('paste', cleanPdfPaste);
+  if (editorDesc) {
+    editorDesc.addEventListener('paste', cleanPdfPaste);
+    editorDesc.addEventListener('input', autoFillFromStatBlock);
+  }
   if (editorItemDesc) editorItemDesc.addEventListener('paste', cleanPdfPaste);
 
   let editorMode = 'monster'; 
