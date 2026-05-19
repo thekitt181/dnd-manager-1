@@ -1,38 +1,6 @@
 import monsters from './monsters.json';
 import items from './items.json';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
-import * as pdfjsLib from 'pdfjs-dist';
-
-// Helper to log user actions to server
-async function logAction(action, data = null) {
-  try {
-    // Get a user identifier (from localStorage if available, or generate a random one)
-    let userId = localStorage.getItem('dnd_extension_user_id');
-    if (!userId) {
-      userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-      localStorage.setItem('dnd_extension_user_id', userId);
-    }
-    
-    const response = await fetch('/api/log-action', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        action,
-        user: userId,
-        data
-      })
-    });
-    
-    if (!response.ok) {
-      console.warn('Failed to log action:', response.statusText);
-    }
-  } catch (err) {
-    // Don't show errors to user for logging failures
-    console.warn('Failed to log action:', err);
-  }
-}
 
 const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
@@ -791,18 +759,11 @@ function saveCustomMonster(monster) {
     try {
         const list = getCustomMonsters();
         const index = list.findIndex(m => m.name === monster.name);
-        const isUpdate = index >= 0;
-        if (isUpdate) list[index] = monster;
+        if (index >= 0) list[index] = monster;
         else list.push(monster);
         localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(list));
         saveToBackend(); // Sync to backend
         restoreItem(monster.name);
-        
-        logAction(isUpdate ? 'update_custom_monster' : 'create_custom_monster', { 
-          monsterName: monster.name, 
-          monsterCr: monster.cr 
-        });
-        
         return true;
     } catch (e) {
         console.error("Failed to save custom monster:", e);
@@ -874,7 +835,7 @@ export function searchSpells(query) {
   // Filter out built-ins overridden by customs
   const activeBuiltIns = builtInSpells.filter(s => !customs.some(c => c.name === s.name));
   
-  const allSpells = [...customs, ...activeBuiltIns].filter(s => !deleted.includes(s.name));
+  const allSpells = activeBuiltIns.filter(s => !deleted.includes(s.name));
   
   if (!query) return allSpells.slice(0, 50);
   
@@ -890,7 +851,7 @@ export function searchMonsters(query, searchNameOnly = false, minCrStr = '', max
   const customs = getCustomMonsters();
   // Filter out built-ins that are overridden by customs
   const builtIns = monsters.filter(m => !customs.some(c => c.name === m.name));
-  const allMonsters = [...customs, ...builtIns].filter(m => !deleted.includes(m.name));
+  const allMonsters = builtIns.filter(m => !deleted.includes(m.name));
 
   // Return everything (first 50) if no filters active
   if (!query && !minCrStr && !maxCrStr) return allMonsters.slice(0, 50);
@@ -1002,6 +963,31 @@ function getStoredImage(mode, name) {
     return null;
 }
 
+// Helper: Get used images for a specific entry (for picker)
+function getUsedImagesForEntry(entryName) {
+    if (!entryName) return [];
+    try {
+        const stored = localStorage.getItem(`dnd_extension_entry_images_${entryName}`);
+        return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+// Helper: Add a used image to an entry's history (if not already present)
+function addUsedImageForEntry(entryName, url) {
+    if (!entryName || !url) return;
+    const used = getUsedImagesForEntry(entryName);
+    if (!used.includes(url)) {
+        used.unshift(url); // Add to front
+        // Keep only last 20 images per entry
+        if (used.length > 20) {
+            used.pop();
+        }
+        localStorage.setItem(`dnd_extension_entry_images_${entryName}`, JSON.stringify(used));
+    }
+}
+
 // Helper to ensure image URL is within OBR limits (2048 chars) by uploading Base64 to local server if needed
 async function ensureShortImageUrl(url, name = null, folder = null) {
     if (!url) return url;
@@ -1075,7 +1061,6 @@ function getPlaceholderImage(name, type = 'monster') {
 }
 
 export async function addMonsterToScene(monster) {
-  logAction('add_monster_to_scene', { monsterName: monster.name, monsterCr: monster.cr });
   // Ensure we have a valid image URL (check localStorage first, then fallback)
   // Use getStoredImage for case-insensitive lookup
   let imageUrl = getStoredImage('monster', monster.name) || monster.image;
@@ -2049,7 +2034,7 @@ export function searchItems(query) {
   const deleted = getDeletedItems();
   const customs = getCustomItems();
   const builtIns = items.filter(i => !customs.some(c => c.name === i.name));
-  const activeItems = [...customs, ...builtIns].filter(i => !deleted.includes(i.name));
+  const activeItems = builtIns.filter(i => !deleted.includes(i.name));
 
   if (!query) return activeItems.slice(0, 50);
   const lowerQuery = query.toLowerCase();
@@ -2217,6 +2202,7 @@ export function searchItems(query) {
         <button id="tab-monsters" style="flex: 1; padding: 5px; cursor: pointer; background: #ddd; border: none; font-weight: bold;">Monsters</button>
         <button id="tab-items" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Items</button>
         <button id="tab-spells" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Spells</button>
+        <button id="tab-custom" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Custom</button>
       </div>
 
       <div id="search-view" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
@@ -2270,28 +2256,22 @@ export function searchItems(query) {
 
         <div id="results" style="overflow-y: auto; flex: 1;"></div>
         
-        <div style="margin-top: 5px; border-top: 1px solid #eee; padding-top: 5px; display: flex; flex-wrap: wrap; gap: 5px; justify-content: space-between; align-items: center;">
-            <div style="display: flex; gap: 5px; flex-wrap: wrap;">
-                <button id="backup-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Backup Data</button>
-                <button id="sync-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;" title="Force sync with online database">Force Sync</button>
-                <button id="import-pdf-btn" style="font-size: 0.8em; cursor: pointer; background: #007bff; color: white; border: 1px solid #0056b3; border-radius: 3px; padding: 5px 8px;">Import PDF</button>
-                <input type="file" id="import-pdf-input" style="display: none" accept=".pdf">
-                <button id="view-logs-btn" style="font-size: 0.8em; cursor: pointer; background: #6c757d; color: white; border: 1px solid #545b62; border-radius: 3px; padding: 5px 8px;">View Logs</button>
-            </div>
-            <span style="font-size: 0.8em; color: #888;">v1.4.0</span>
-            <div style="display: flex; gap: 5px;">
-                <button id="restore-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Restore Data</button>
-                <button id="export-source-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #007bff; color: #007bff; border-radius: 3px; padding: 5px 8px;" title="Download JSON files to update source code for hosting">Export Source</button>
-                <input type="file" id="restore-file-input" style="display: none" accept=".json">
+        <div style="margin-top: 5px; border-top: 1px solid #eee; padding-top: 5px; display: flex; justify-content: space-between; align-items: center;">
+            <button id="backup-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Backup Data</button>
+            <button id="sync-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;" title="Force sync with online database">Force Sync</button>
+            <span style="font-size: 0.8em; color: #888;">v1.3.0</span>
+            <button id="restore-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 3px; padding: 5px 8px;">Restore Data</button>
+            <button id="export-source-btn" style="font-size: 0.8em; cursor: pointer; background: none; border: 1px solid #007bff; color: #007bff; border-radius: 3px; padding: 5px 8px;" title="Download JSON files to update source code for hosting">Export Source</button>
+            <input type="file" id="restore-file-input" style="display: none" accept=".json">
         </div>
       </div>
 
-      <div id="stats-view" style="display: none; height: 100%; overflow-y: auto; background: white; padding: 10px;">
+      <div id="stats-view" style="display: none; height: 100%; overflow-y: auto;">
         <button id="back-btn" style="margin-bottom: 10px;">&larr; Back to Search</button>
         <div id="stats-content"></div>
       </div>
 
-      <div id="editor-view" style="display: none; height: 100%; overflow-y: auto; background: white; padding: 10px;">
+      <div id="editor-view" style="display: none; height: 100%; overflow-y: auto;">
         <button id="editor-cancel-btn" style="margin-bottom: 10px;">&larr; Cancel</button>
         <h3 style="margin-top: 0;"><span id="editor-title-action">Create</span> <span id="editor-title-type">Monster</span></h3>
         
@@ -2302,6 +2282,10 @@ export function searchItems(query) {
                 <img id="editor-image-preview" style="width: 50px; height: 50px; object-fit: contain; border: 1px solid #555; background: #333;" />
                 <span id="editor-image-status" style="font-size: 0.8em; color: #aaa;"></span>
                 <button id="editor-clear-image-btn" style="padding: 2px 5px; cursor: pointer; background: #555; border: 1px solid #777; color: white; font-size: 0.8em;">Clear</button>
+            </div>
+            <div id="editor-used-images-container" style="margin-top: 10px;">
+                <div style="font-size: 0.9em; font-weight: bold; margin-bottom: 5px;">Used Images:</div>
+                <div id="editor-used-images" style="display: flex; gap: 5px; overflow-x: auto; padding: 5px; border: 1px solid #ddd; border-radius: 4px; min-height: 60px;"></div>
             </div>
             
             <!-- Monster Specific -->
@@ -2357,6 +2341,7 @@ export function searchItems(query) {
   const tabMonsters = document.getElementById('tab-monsters');
   const tabItems = document.getElementById('tab-items');
   const tabSpells = document.getElementById('tab-spells');
+  const tabCustom = document.getElementById('tab-custom');
   const monsterFilters = document.getElementById('monster-filters');
   const globalSettings = document.getElementById('global-settings');
   const spellTools = document.getElementById('spell-tools');
@@ -2505,6 +2490,7 @@ export function searchItems(query) {
   const editorImagePreview = document.getElementById('editor-image-preview');
   const editorImageStatus = document.getElementById('editor-image-status');
   const editorClearImageBtn = document.getElementById('editor-clear-image-btn');
+  const editorUsedImages = document.getElementById('editor-used-images');
   const editorMonsterFields = document.getElementById('editor-monster-fields');
   const editorItemFields = document.getElementById('editor-item-fields');
   const editorSpellFields = document.getElementById('editor-spell-fields');
@@ -2627,6 +2613,40 @@ export function searchItems(query) {
           editorImagePreviewContainer.style.display = 'none';
       }
 
+      // Render used images for this entry
+      const entryName = data ? data.name : null;
+      let usedImagesForEntry = [];
+      
+      // Add current image first if it exists
+      if (existingImg) {
+        usedImagesForEntry.push(existingImg);
+      }
+      
+      // Add other used images for this entry (without duplicates)
+      if (entryName) {
+        const entryHistory = getUsedImagesForEntry(entryName);
+        entryHistory.forEach(url => {
+          if (!usedImagesForEntry.includes(url)) {
+            usedImagesForEntry.push(url);
+          }
+        });
+      }
+      
+      editorUsedImages.innerHTML = usedImagesForEntry.map((url, idx) => `
+        <img src="${url}" data-url="${url}" style="width: 50px; height: 50px; object-fit: contain; border: 2px solid ${idx === 0 && existingImg === url ? '#2196F3' : '#ddd'}; border-radius: 4px; cursor: pointer; background: #333;" title="Click to use this image" />
+      `).join('');
+
+      // Add click handlers to used images
+      editorUsedImages.querySelectorAll('img').forEach(img => {
+        img.addEventListener('click', () => {
+          const url = img.dataset.url;
+          editorImageUrl.value = url;
+          editorImagePreview.src = url;
+          editorImagePreviewContainer.style.display = 'flex';
+          editorImageStatus.innerText = 'Used Image';
+        });
+      });
+
       if (mode === 'monster') {
           editorMonsterFields.style.display = 'flex';
           editorItemFields.style.display = 'none';
@@ -2672,7 +2692,7 @@ export function searchItems(query) {
   };
 
   createBtn.addEventListener('click', () => {
-      if (activeTab === 'monsters') openEditor('monster');
+      if (activeTab === 'monsters' || activeTab === 'custom') openEditor('monster');
       else if (activeTab === 'items') openEditor('item');
       else if (activeTab === 'spells') openEditor('spell');
   });
@@ -2772,6 +2792,7 @@ export function searchItems(query) {
 
           try {
               localStorage.setItem(imgKey, newImgUrl);
+              addUsedImageForEntry(name, newImgUrl);
               // Verify immediately
               const saved = localStorage.getItem(imgKey);
               if (!saved || saved !== newImgUrl) {
@@ -3040,65 +3061,6 @@ export function searchItems(query) {
       });
   }
 
-  // View Logs Logic
-  const viewLogsBtn = document.getElementById('view-logs-btn');
-  if (viewLogsBtn) {
-    viewLogsBtn.addEventListener('click', async () => {
-      try {
-        const response = await fetch('/api/logs');
-        const { logs } = await response.json();
-        
-        if (!logs || logs.length === 0) {
-          alert('No logs found yet!');
-          return;
-        }
-        
-        // Create a simple HTML table or text view
-        const logsHtml = `
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>Action Logs</title>
-              <style>
-                body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
-                h1 { color: #333; }
-                .log-entry { background: white; padding: 15px; margin: 1px solid #ddd; border-radius: 5px; margin-bottom: 10px; }
-                .log-timestamp { color: #666; font-size: 0.9em; }
-                .log-action { font-weight: bold; color: #007bff; }
-                .log-user { color: #6c757d; }
-                .log-data { margin-top: 8px; background: #f8f9fa; padding: 8px; border-radius: 3px; font-family: monospace; font-size: 0.9em; }
-              </style>
-            </head>
-            <body>
-              <h1>Action Logs</h1>
-              <div id="logs-container">
-                ${logs.map(log => `
-                  <div class="log-entry">
-                    <div class="log-timestamp">${new Date(log.timestamp).toLocaleString()}</div>
-                    <div class="log-action">Action: ${log.action}</div>
-                    <div class="log-user">User: ${log.user}</div>
-                    <div class="log-ip">IP: ${log.ip}</div>
-                    ${log.data ? `<div class="log-data">Data: ${JSON.stringify(log.data, null, 2)}</div>` : ''}
-                  </div>
-                `).join('')}
-              </div>
-            </body>
-          </html>
-        `;
-        
-        // Open in new tab
-        const blob = new Blob([logsHtml], { type: 'text/html' });
-        const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        
-      } catch (err) {
-        console.error('Failed to load logs:', err);
-        alert('Failed to load logs: ' + err.message);
-      }
-    });
-  }
-
   // Export Source Logic (for Hosting)
   const exportSourceBtn = document.getElementById('export-source-btn');
   if (exportSourceBtn) {
@@ -3162,235 +3124,6 @@ export function searchItems(query) {
               URL.revokeObjectURL(iUrl);
           }, 500);
       });
-  }
-
-  // PDF Import Logic
-  const importPdfBtn = document.getElementById('import-pdf-btn');
-  const importPdfInput = document.getElementById('import-pdf-input');
-
-  // Set up pdfjs worker
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-
-  async function extractTextFromPdf(file) {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-    let fullText = "";
-    
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map(item => item.str).join(" ");
-      fullText += pageText + "\n\n";
-    }
-    
-    return fullText;
-  }
-
-  function extractMonstersFromText(text, fileName) {
-    const monsters = [];
-    
-    // First, normalize the text - remove extra spaces, normalize newlines
-    let normalizedText = text.replace(/\r\n/g, '\n');
-    normalizedText = normalizedText.replace(/[ \t]+/g, ' ');
-    
-    // First, let's look for common stat block markers to split the text into blocks
-    // Stat blocks usually have:
-    // - AC
-    // - HP
-    // - CR or Challenge
-    // - Size + Type
-    
-    // Let's split the text into potential blocks using common section headers as markers
-    const sectionHeaders = [
-      'TRAITS', 'ACTIONS', 'LEGENDARY ACTIONS', 'REACTIONS', 'SPELLCASTING',
-      'ABILITY SCORES', 'SAVING THROWS', 'SKILLS', 'DAMAGE RESISTANCES',
-      'DAMAGE IMMUNITIES', 'CONDITION IMMUNITIES', 'SENSES', 'LANGUAGES'
-    ];
-    
-    // First, let's find all positions of AC, HP, CR/Challenge
-    const potentialStatBlocks = [];
-    
-    // First, find all matches of "Armor Class" or "AC" followed by a number
-    const acRegex = /(Armor Class|AC)\s*:?\s*(\d+)/gi;
-    let match;
-    
-    // For each AC match, look back and forward to find the full stat block
-    while ((match = acRegex.exec(normalizedText)) !== null) {
-      const acIndex = match.index;
-      
-      // Look back up to 500 characters to find the monster name and size/type
-      let startIndex = Math.max(0, acIndex - 1000);
-      let preText = normalizedText.substring(startIndex, acIndex);
-      
-      // Look for a size/type line (Small/Medium/Large/Huge/Gargantuan/Tiny followed by type)
-      const sizeTypeRegex = /(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\),]+)/gi;
-      let sizeTypeMatch;
-      let bestSizeTypeMatch = null;
-      let bestSizeTypeIndex = -1;
-      
-      while ((sizeTypeMatch = sizeTypeRegex.exec(preText)) !== null) {
-        const matchIndex = startIndex + sizeTypeMatch.index;
-        if (matchIndex > bestSizeTypeIndex) {
-          bestSizeTypeMatch = sizeTypeMatch;
-          bestSizeTypeIndex = matchIndex;
-        }
-      }
-      
-      if (bestSizeTypeMatch) {
-        // Now look for the monster name - it's probably in the text before the size/type
-        let nameStartIndex = Math.max(0, bestSizeTypeIndex - 500);
-        let nameText = normalizedText.substring(nameStartIndex, bestSizeTypeIndex).trim();
-        
-        // Split nameText into lines and take the last non-empty line as the name
-        const nameLines = nameText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        let monsterName = nameLines.length > 0 ? nameLines[nameLines.length - 1] : "Unknown Monster";
-        
-        // Clean up the name - remove any leading numbers, symbols, etc.
-        monsterName = monsterName.replace(/^[0-9\.\-\–\—\s]+/, '').trim();
-        
-        // Now look for the end of the stat block - usually the next section header
-        let endIndex = normalizedText.length;
-        for (const header of sectionHeaders) {
-          const headerIndex = normalizedText.indexOf(header, acIndex);
-          if (headerIndex !== -1 && headerIndex < endIndex) {
-            endIndex = headerIndex;
-          }
-        }
-        
-        // Extract the full stat block text
-        const fullStatBlockText = normalizedText.substring(bestSizeTypeIndex - 200, endIndex);
-        
-        // Now parse this full stat block with our parseStatBlock function
-        const parsed = parseStatBlock(monsterName + "\n" + fullStatBlockText);
-        
-        const monster = {
-          name: parsed.name || monsterName,
-          hp: parsed.hp,
-          ac: parsed.ac,
-          cr: parsed.cr,
-          type: parsed.type || bestSizeTypeMatch[0],
-          description: fullStatBlockText,
-          source: fileName
-        };
-        
-        // Check if we already have this monster (by name) to avoid duplicates
-        const alreadyExists = monsters.some(m => m.name.toLowerCase() === monster.name.toLowerCase());
-        if (!alreadyExists && monster.name !== "Unknown Monster") {
-          monsters.push(monster);
-        }
-      }
-    }
-    
-    // Also try a second approach - look for CR/Challenge first
-    const crRegex = /(Challenge Rating|Challenge|CR)\s*:?\s*([0-9\/\-—]+)/gi;
-    while ((match = crRegex.exec(normalizedText)) !== null) {
-      const crIndex = match.index;
-      
-      // Look back up to 1500 characters to find the monster name and size/type
-      let startIndex = Math.max(0, crIndex - 1500);
-      let preText = normalizedText.substring(startIndex, crIndex);
-      
-      // Look for a size/type line
-      const sizeTypeRegex = /(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\),]+)/gi;
-      let sizeTypeMatch;
-      let bestSizeTypeMatch = null;
-      let bestSizeTypeIndex = -1;
-      
-      while ((sizeTypeMatch = sizeTypeRegex.exec(preText)) !== null) {
-        const matchIndex = startIndex + sizeTypeMatch.index;
-        if (matchIndex > bestSizeTypeIndex) {
-          bestSizeTypeMatch = sizeTypeMatch;
-          bestSizeTypeIndex = matchIndex;
-        }
-      }
-      
-      if (bestSizeTypeMatch) {
-        // Now look for the monster name
-        let nameStartIndex = Math.max(0, bestSizeTypeIndex - 500);
-        let nameText = normalizedText.substring(nameStartIndex, bestSizeTypeIndex).trim();
-        const nameLines = nameText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        let monsterName = nameLines.length > 0 ? nameLines[nameLines.length - 1] : "Unknown Monster";
-        monsterName = monsterName.replace(/^[0-9\.\-\–\—\s]+/, '').trim();
-        
-        // Now look for the end of the stat block
-        let endIndex = normalizedText.length;
-        for (const header of sectionHeaders) {
-          const headerIndex = normalizedText.indexOf(header, crIndex);
-          if (headerIndex !== -1 && headerIndex < endIndex) {
-            endIndex = headerIndex;
-          }
-        }
-        
-        const fullStatBlockText = normalizedText.substring(bestSizeTypeIndex - 200, endIndex);
-        const parsed = parseStatBlock(monsterName + "\n" + fullStatBlockText);
-        
-        const monster = {
-          name: parsed.name || monsterName,
-          hp: parsed.hp,
-          ac: parsed.ac,
-          cr: parsed.cr,
-          type: parsed.type || bestSizeTypeMatch[0],
-          description: fullStatBlockText,
-          source: fileName
-        };
-        
-        const alreadyExists = monsters.some(m => m.name.toLowerCase() === monster.name.toLowerCase());
-        if (!alreadyExists && monster.name !== "Unknown Monster") {
-          monsters.push(monster);
-        }
-      }
-    }
-    
-    // Sort the monsters by name
-    monsters.sort((a, b) => a.name.localeCompare(b.name));
-    
-    return monsters;
-  }
-
-  if (importPdfBtn && importPdfInput) {
-    importPdfBtn.addEventListener('click', () => importPdfInput.click());
-    
-    importPdfInput.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      
-      logAction('import_pdf', { fileName: file.name, fileSize: file.size });
-      
-      importPdfBtn.innerText = "Importing...";
-      importPdfBtn.disabled = true;
-      
-      try {
-        console.log("Importing PDF:", file.name);
-        const pdfText = await extractTextFromPdf(file);
-        console.log("Extracted PDF text (first 2000 chars):", pdfText.substring(0, 2000));
-        
-        const extractedMonsters = extractMonstersFromText(pdfText, file.name);
-        console.log("Extracted monsters:", extractedMonsters);
-        
-        if (extractedMonsters.length === 0) {
-          alert("No monsters found in PDF. The PDF format might not be supported yet.");
-        } else {
-          const confirmMsg = `Found ${extractedMonsters.length} potential monster(s) in the PDF:\n\n${extractedMonsters.map(m => `- ${m.name}`).join('\n')}\n\nImport them as custom monsters?`;
-          if (confirm(confirmMsg)) {
-            let importedCount = 0;
-            for (const monster of extractedMonsters) {
-              if (saveCustomMonster(monster)) {
-                importedCount++;
-              }
-            }
-            alert(`Successfully imported ${importedCount} monster(s)!`);
-            renderResults(input.value);
-          }
-        }
-      } catch (err) {
-        console.error("Failed to import PDF:", err);
-        alert("Failed to import PDF: " + err.message);
-      } finally {
-        importPdfBtn.innerText = "Import PDF";
-        importPdfBtn.disabled = false;
-        importPdfInput.value = ""; // Clear the input
-      }
-    });
   }
 
   const dragHandle = document.getElementById('drag-handle');
@@ -3497,6 +3230,8 @@ export function searchItems(query) {
       tabItems.style.fontWeight = 'normal';
       tabSpells.style.background = '#f0f0f0';
       tabSpells.style.fontWeight = 'normal';
+      tabCustom.style.background = '#f0f0f0';
+      tabCustom.style.fontWeight = 'normal';
       
       monsterFilters.style.display = 'none';
       if (globalSettings) globalSettings.style.display = 'none';
@@ -3520,6 +3255,10 @@ export function searchItems(query) {
           tabSpells.style.fontWeight = 'bold';
           spellTools.style.display = 'flex';
           input.placeholder = "Search spells (e.g. Fireball)...";
+      } else if (tab === 'custom') {
+          tabCustom.style.background = '#ddd';
+          tabCustom.style.fontWeight = 'bold';
+          input.placeholder = "Search custom entries...";
       }
       renderResults(input.value);
   };
@@ -3527,6 +3266,7 @@ export function searchItems(query) {
   tabMonsters.addEventListener('click', () => switchTab('monsters'));
   tabItems.addEventListener('click', () => switchTab('items'));
   tabSpells.addEventListener('click', () => switchTab('spells'));
+  tabCustom.addEventListener('click', () => switchTab('custom'));
 
   // Random Item Logic
   if (randomBtn) {
@@ -3550,12 +3290,333 @@ export function searchItems(query) {
     searchView.style.display = 'flex';
   });
 
+  // --- New Image Edit Event Listeners (Event Delegation) ---
+  // Toggle image edit panel
+  document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'toggle-image-edit') {
+      const panel = document.getElementById('image-edit-panel');
+      if (!panel) return;
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      
+      if (panel.style.display === 'block') {
+        const entryName = statsContent.dataset.entryName;
+        const isItem = statsContent.dataset.isItem === 'true';
+        const isSpell = statsContent.dataset.isSpell === 'true';
+        
+        const imgKey = isItem ? `item_image_${entryName}` : (isSpell ? `spell_image_${entryName}` : `monster_image_${entryName}`);
+        const currentImg = localStorage.getItem(imgKey);
+        
+        let usedImagesForEntry = [];
+        if (currentImg) {
+          usedImagesForEntry.push(currentImg);
+        }
+        
+        const entryHistory = getUsedImagesForEntry(entryName);
+        entryHistory.forEach(url => {
+          if (!usedImagesForEntry.includes(url)) {
+            usedImagesForEntry.push(url);
+          }
+        });
+        
+        const statsUsedImages = document.getElementById('stats-used-images');
+        if (statsUsedImages) {
+          statsUsedImages.innerHTML = usedImagesForEntry.map((url, idx) => `
+            <img src="${url}" data-url="${url}" style="width: 50px; height: 50px; object-fit: contain; border: 2px solid ${idx === 0 && currentImg === url ? '#2196F3' : '#ddd'}; border-radius: 4px; cursor: pointer; background: #333;" title="Click to use this image" />
+          `).join('');
+        }
+      }
+    }
+  });
+
+  // Click on used images in stats panel
+  document.addEventListener('click', (e) => {
+    const img = e.target.closest('#stats-used-images img');
+    if (img) {
+      const urlInput = document.getElementById('new-image-url');
+      if (urlInput) {
+        urlInput.value = img.dataset.url;
+      }
+    }
+  });
+
+  // Reset image button
+  document.addEventListener('click', async (e) => {
+    if (e.target && e.target.id === 'reset-this-image') {
+      const entryName = statsContent.dataset.entryName;
+      const isItem = statsContent.dataset.isItem === 'true';
+      
+      const key = isItem ? `item_image_${entryName}` : `monster_image_${entryName}`;
+      
+      if (localStorage.getItem(key)) {
+        if (confirm(`Reset custom image for "${entryName}"? This will revert to the default image.`)) {
+          localStorage.removeItem(key);
+          saveToBackend();
+          alert(`Custom image for "${entryName}" removed.`);
+        }
+      } else {
+        alert(`No custom image saved for "${entryName}".`);
+      }
+    }
+  });
+
+  // Clear image cache button
+  document.addEventListener('click', async (e) => {
+    if (e.target && e.target.id === 'clear-image-cache') {
+      if (confirm('Delete all custom monster images from storage? This cannot be undone.')) {
+        let count = 0;
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key.startsWith('monster_image_')) {
+            keys.push(key);
+          }
+        }
+        keys.forEach(k => {
+          localStorage.removeItem(k);
+          count++;
+        });
+        saveToBackend();
+        alert(`Cleared ${count} saved images.`);
+      }
+    }
+  });
+
+  // Library button click
+  document.addEventListener('click', async (e) => {
+    if (e.target && e.target.id === 'library-btn') {
+      try {
+        if (!OBR || !OBR.assets) {
+          throw new Error("OBR Assets API is not available.");
+        }
+        const result = await OBR.assets.downloadImages(false, '', 'CHARACTER');
+        if (result && result.length > 0) {
+          const img = result[0];
+          console.log("Selected library image:", img);
+          const urlInput = document.getElementById('new-image-url');
+          if (urlInput && img.image && img.image.url) {
+            urlInput.value = img.image.url;
+            if (img.image.mime) {
+              urlInput.dataset.mime = img.image.mime;
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to open library (Full Error):", JSON.stringify(err, null, 2));
+        const errName = err.name || (err.error && err.error.name) || '';
+        const errMsg = err.message || (err.error && err.error.message) || (typeof err === 'object' ? JSON.stringify(err) : String(err));
+        alert(`Could not open library.\nDetails: ${errMsg}\n\nPlease ensure you are running inside Owlbear Rodeo as a GM.`);
+      }
+    }
+  });
+
+  // Save image button click
+  document.addEventListener('click', async (e) => {
+    if (e.target && e.target.id === 'save-new-image') {
+      const entryName = statsContent.dataset.entryName;
+      const fullData = JSON.parse(statsContent.dataset.fullData);
+      const itemId = statsContent.dataset.itemId || null;
+      const urlInput = document.getElementById('new-image-url');
+      const panel = document.getElementById('image-edit-panel');
+      const saveImgBtn = document.getElementById('save-new-image');
+      
+      if (!urlInput) return;
+      
+      let newImage = urlInput.value.trim();
+      
+      // Parse Google image URLs
+      if (newImage.includes('google.com') && newImage.includes('imgurl=')) {
+        try {
+          const urlObj = new URL(newImage);
+          const imgUrl = urlObj.searchParams.get('imgurl');
+          if (imgUrl) {
+            console.log("Detected Google Image URL, extracted:", imgUrl);
+            newImage = decodeURIComponent(imgUrl);
+          }
+        } catch (err) {
+          console.warn("Failed to parse Google Image URL:", err);
+        }
+      }
+      
+      // Parse OBR JSON
+      if (newImage.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(newImage);
+          console.log("Detected JSON input, attempting to extract image URL...", parsed);
+          let extractedUrl = null;
+          let extractedMime = null;
+          
+          if (parsed.items && parsed.items.shared) {
+            const itemKeys = Object.keys(parsed.items.shared);
+            if (itemKeys.length > 0) {
+              const firstItem = parsed.items.shared[itemKeys[0]];
+              if (firstItem.image && firstItem.image.url) {
+                extractedUrl = firstItem.image.url;
+                if (firstItem.image.mime) extractedMime = firstItem.image.mime;
+              }
+            }
+          }
+          
+          if (!extractedUrl && parsed.image && parsed.image.url) {
+            extractedUrl = parsed.image.url;
+            if (parsed.image.mime) extractedMime = parsed.image.mime;
+          }
+          
+          if (extractedUrl) {
+            newImage = extractedUrl;
+            if (extractedMime) {
+              urlInput.dataset.mime = extractedMime;
+            }
+            console.log("Successfully extracted URL:", newImage);
+          }
+        } catch (err) {
+          console.warn("Input looked like JSON but failed to parse/extract:", err);
+        }
+      }
+      
+      newImage = newImage.replace(/`/g, '').trim();
+      
+      const saveAndApply = async (imgSrc, isRetry = false) => {
+        try {
+          if (imgSrc.trim().startsWith('{') || imgSrc.includes('"items":')) {
+            throw new Error("Invalid image URL. It looks like you pasted a raw JSON object. Please try extracting just the URL or use 'Select from Library'.");
+          }
+          
+          try {
+            localStorage.setItem(`monster_image_${entryName}`, imgSrc);
+            addUsedImageForEntry(entryName, imgSrc);
+            saveToBackend();
+          } catch (storageErr) {
+            console.warn("Failed to save image to localStorage (Quota Exceeded?):", storageErr);
+          }
+          
+          if (itemId) {
+            const items = await OBR.scene.items.getItems([itemId]);
+            if (items.length > 0) {
+              const oldItem = items[0];
+              
+              if (oldItem.image.url === imgSrc) {
+                alert("The selected image is identical to the current one.");
+                return;
+              }
+              
+              const mime = urlInput.dataset.mime || 
+                          (imgSrc.startsWith('data:image/jpeg') ? 'image/jpeg' : 
+                          (imgSrc.startsWith('data:image/webp') ? 'image/webp' : 
+                          (imgSrc.startsWith('data:image/png') ? 'image/png' : 'image/png')));
+              
+              let squares = 1;
+              if (fullData.type) {
+                const lowerType = fullData.type.toLowerCase();
+                if (lowerType.includes('gargantuan')) squares = 4;
+                else if (lowerType.includes('huge')) squares = 3;
+                else if (lowerType.includes('large')) squares = 2;
+              }
+              
+              let imgWidth, imgHeight, imgDpi;
+              const dims = await getImageDimensions(imgSrc);
+              if (dims && dims.width && dims.height) {
+                imgWidth = dims.width;
+                imgHeight = dims.height;
+                const maxDim = Math.max(imgWidth, imgHeight);
+                imgDpi = maxDim / squares;
+              } else {
+                imgWidth = squares * 150;
+                imgHeight = squares * 150;
+                imgDpi = 150;
+              }
+              
+              const newItemId = `monster-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+              const newItem = {
+                ...oldItem,
+                id: newItemId,
+                locked: false,
+                disableHit: false,
+                image: {
+                  ...oldItem.image,
+                  url: imgSrc,
+                  mime: mime,
+                  width: imgWidth,
+                  height: imgHeight
+                },
+                grid: { dpi: imgDpi, offset: { x: 0, y: 0 } },
+                scale: { x: 1, y: 1 }
+              };
+              
+              if (!newItem.type) newItem.type = 'IMAGE';
+              if (!newItem.scale) newItem.scale = { x: 1, y: 1 };
+              if (!newItem.position) newItem.position = { x: 0, y: 0 };
+              
+              console.log("Replacing item:", oldItem.id, "with", newItem.id);
+              
+              await OBR.scene.items.addItems([newItem]);
+              await OBR.scene.items.deleteItems([itemId]);
+              
+              showStats(fullData, newItemId);
+              return;
+            }
+          }
+          
+          alert('Image saved! Future adds of this monster will use this image.');
+          if (panel) panel.style.display = 'none';
+        } catch (err) {
+          console.error("Error saving image (FULL LOG):", JSON.stringify(err, null, 2));
+          const errMsg = err.message || (err.error && err.error.message) || (typeof err === 'object' ? JSON.stringify(err) : String(err));
+          if (!isRetry) { 
+            alert("Failed to save image. " + errMsg + "\n\nSee console (F12) for full error details.");
+          }
+        }
+      };
+      
+      if (newImage) {
+        saveImgBtn.disabled = true;
+        saveImgBtn.innerText = "Processing...";
+        try {
+          let finalImage = await processAndRemoveBackground(newImage);
+          try {
+            saveImgBtn.innerText = "Verifying...";
+            let folder = 'monsters';
+            if (fullData && (fullData.rarity || fullData.type === 'Weapon' || fullData.type === 'Armor' || fullData.type === 'Potion')) {
+              folder = 'items';
+            }
+            finalImage = await ensureShortImageUrl(finalImage, entryName, folder);
+          } catch (uploadErr) {
+            console.error("Image optimization failed:", uploadErr);
+          }
+          await saveAndApply(finalImage);
+        } catch (err) {
+          console.error("Processing failed, using original", err);
+          try {
+            let folder = 'monsters';
+            if (fullData && (fullData.rarity || fullData.type === 'Weapon' || fullData.type === 'Armor' || fullData.type === 'Potion')) {
+              folder = 'items';
+            }
+            newImage = await ensureShortImageUrl(newImage, entryName, folder);
+          } catch (ignore) {}
+          await saveAndApply(newImage);
+        } finally {
+          saveImgBtn.disabled = false;
+          saveImgBtn.innerText = "Save & Apply";
+        }
+      } else {
+        alert("Please select an image from the library or paste a URL.");
+      }
+    }
+  });
+
   const showStats = (data, itemId) => {
     searchView.style.display = 'none';
     statsView.style.display = 'block';
     
     const isSpell = data.level !== undefined || data.school !== undefined || (data.aoe !== undefined);
     const isItem = !isSpell && (!data.hp && !data.ac);
+    const entryName = data.name.split('\n')[0];
+    // Store data in data attributes
+    statsContent.dataset.entryName = entryName;
+    statsContent.dataset.isItem = isItem;
+    statsContent.dataset.isSpell = isSpell;
+    statsContent.dataset.itemId = itemId || '';
+    // Also store the full data as a JSON string (for quick access)
+    statsContent.dataset.fullData = JSON.stringify(data);
 
     // Try to find fresh data from the library
     let libraryData = null;
@@ -3680,7 +3741,11 @@ export function searchItems(query) {
             <button id="library-btn" style="width: 100%; margin-bottom: 5px; background-color: #6200ea; color: white; border: none; padding: 8px; border-radius: 3px; cursor: pointer;">Select from Library / Upload</button>
             <div style="text-align: center; margin: 5px 0; font-size: 0.8em;">- OR -</div>
             <input type="text" id="new-image-url" placeholder="Paste Image URL" style="width: 100%; box-sizing: border-box; margin-bottom: 5px;">
-            <button id="save-new-image" style="width: 100%; margin-bottom: 5px;">Save & Apply</button>
+            <div style="margin-top: 10px;">
+                <div style="font-size: 0.9em; font-weight: bold; margin-bottom: 5px;">Used Images:</div>
+                <div id="stats-used-images" style="display: flex; gap: 5px; overflow-x: auto; padding: 5px; border: 1px solid #ddd; border-radius: 4px; min-height: 60px; background: white;"></div>
+            </div>
+            <button id="save-new-image" style="width: 100%; margin-top: 10px; margin-bottom: 5px;">Save & Apply</button>
             <div style="display: flex; gap: 5px;">
                 <button id="reset-this-image" style="flex: 1; background: #f57c00; color: white; border: none; padding: 5px; border-radius: 3px; cursor: pointer;" title="Remove custom image for this entry only">Reset This Image</button>
                 <button id="clear-image-cache" style="flex: 1; background: #d33; color: white; border: none; padding: 5px; border-radius: 3px; cursor: pointer;" title="Delete ALL custom monster images">Clear All Images</button>
@@ -3859,7 +3924,6 @@ export function searchItems(query) {
         refreshBtn.addEventListener('click', async () => {
           console.log("Refresh button clicked!");
           console.log("Description to use:", descriptionToUse);
-          logAction('refresh_monster_stats', { monsterName: data.name });
           
           if (!confirm(`Refresh stats for ${data.name} using the description/stat block? This will update HP, AC, CR, and type!`)) {
             return;
@@ -4515,283 +4579,7 @@ export function searchItems(query) {
         }
     });
 
-    // Image Edit Logic
-    const toggleBtn = document.getElementById('toggle-image-edit');
-    const panel = document.getElementById('image-edit-panel');
-    const saveImgBtn = document.getElementById('save-new-image');
-    const urlInput = document.getElementById('new-image-url');
-    const libraryBtn = document.getElementById('library-btn');
-    const clearCacheBtn = document.getElementById('clear-image-cache');
-    const resetImgBtn = document.getElementById('reset-this-image');
 
-    toggleBtn.addEventListener('click', () => {
-        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-    });
-
-    // Reset single image handler
-    resetImgBtn.addEventListener('click', () => {
-        const entryName = data.name.split('\n')[0];
-        const key = isItem ? `item_image_${entryName}` : `monster_image_${entryName}`;
-        
-        if (localStorage.getItem(key)) {
-            if (confirm(`Reset custom image for "${entryName}"? This will revert to the default image.`)) {
-                localStorage.removeItem(key);
-                saveToBackend(); // Sync delete to backend
-                alert(`Custom image for "${entryName}" removed.`);
-                // Ideally reload the view, but for now just alert.
-            }
-        } else {
-            alert(`No custom image saved for "${entryName}".`);
-        }
-    });
-
-    clearCacheBtn.addEventListener('click', () => {
-        if (confirm('Delete all custom monster images from storage? This cannot be undone.')) {
-            let count = 0;
-            const keys = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key.startsWith('monster_image_')) {
-                    keys.push(key);
-                }
-            }
-            keys.forEach(k => {
-                localStorage.removeItem(k);
-                count++;
-            });
-            saveToBackend(); // Sync full clear to backend
-            alert(`Cleared ${count} saved images.`);
-        }
-    });
-
-    // Library selection handler
-    libraryBtn.addEventListener('click', async () => {
-        try {
-            if (!OBR || !OBR.assets) {
-                throw new Error("OBR Assets API is not available.");
-            }
-            // Open OBR Asset Picker
-            const result = await OBR.assets.downloadImages(false, '', 'CHARACTER');
-            if (result && result.length > 0) {
-                const img = result[0];
-                console.log("Selected library image:", img);
-                if (img.image && img.image.url) {
-                    urlInput.value = img.image.url;
-                    if (img.image.mime) {
-                        urlInput.dataset.mime = img.image.mime;
-                    }
-                }
-            }
-        } catch (e) {
-            console.error("Failed to open library (Full Error):", JSON.stringify(e, null, 2));
-            
-            // Safely extract error details
-            const errName = e.name || (e.error && e.error.name) || '';
-            const errMsg = e.message || (e.error && e.error.message) || (typeof e === 'object' ? JSON.stringify(e) : String(e));
-            
-            alert(`Could not open library.\nDetails: ${errMsg}\n\nPlease ensure you are running inside Owlbear Rodeo as a GM.`);
-        }
-    });
-
-    saveImgBtn.addEventListener('click', async () => {
-        const monsterName = data.name.split('\n')[0];
-        let newImage = urlInput.value.trim();
-        
-        // INTELLIGENT PARSING: Handle Google Image Search Result URLs
-        if (newImage.includes('google.com') && newImage.includes('imgurl=')) {
-            try {
-                const urlObj = new URL(newImage);
-                const imgUrl = urlObj.searchParams.get('imgurl');
-                if (imgUrl) {
-                    console.log("Detected Google Image URL, extracted:", imgUrl);
-                    newImage = decodeURIComponent(imgUrl);
-                }
-            } catch (e) {
-                console.warn("Failed to parse Google Image URL:", e);
-            }
-        }
-
-        // INTELLIGENT PARSING: Handle if user pasted a full OBR Item JSON
-        if (newImage.startsWith('{')) {
-            try {
-                const parsed = JSON.parse(newImage);
-                console.log("Detected JSON input, attempting to extract image URL...", parsed);
-                
-                let extractedUrl = null;
-                let extractedMime = null;
-
-                // Pattern 1: OBR Clipboard format { items: { shared: { id: { image: { url: ... } } } } }
-                if (parsed.items && parsed.items.shared) {
-                     const itemKeys = Object.keys(parsed.items.shared);
-                     if (itemKeys.length > 0) {
-                         const firstItem = parsed.items.shared[itemKeys[0]];
-                         if (firstItem.image && firstItem.image.url) {
-                             extractedUrl = firstItem.image.url;
-                             if (firstItem.image.mime) extractedMime = firstItem.image.mime;
-                         }
-                     }
-                }
-                
-                // Pattern 2: Single Item { image: { url: ... } }
-                if (!extractedUrl && parsed.image && parsed.image.url) {
-                    extractedUrl = parsed.image.url;
-                    if (parsed.image.mime) extractedMime = parsed.image.mime;
-                }
-
-                if (extractedUrl) {
-                    newImage = extractedUrl;
-                    if (extractedMime) {
-                        urlInput.dataset.mime = extractedMime;
-                    }
-                    console.log("Successfully extracted URL:", newImage);
-                }
-            } catch (e) {
-                console.warn("Input looked like JSON but failed to parse/extract:", e);
-            }
-        }
-
-        // General cleanup (remove backticks/spaces)
-        newImage = newImage.replace(/`/g, '').trim();
-
-        const saveAndApply = async (imgSrc, isRetry = false) => {
-             try {
-                 // Check if it still looks like JSON (invalid URL)
-                 if (imgSrc.trim().startsWith('{') || imgSrc.includes('"items":')) {
-                      throw new Error("Invalid image URL. It looks like you pasted a raw JSON object. Please try extracting just the URL or use 'Select from Library'.");
-                 }
-
-                 try {
-                    localStorage.setItem(`monster_image_${monsterName}`, imgSrc);
-                    saveToBackend(); // Sync to backend immediately
-                 } catch (storageError) {
-                    console.warn("Failed to save image to localStorage (Quota Exceeded?):", storageError);
-                 }
-                 
-                 // If editing a specific item, update it immediately
-                 if (itemId) {
-                     const items = await OBR.scene.items.getItems([itemId]);
-                     if (items.length > 0) {
-                         const oldItem = items[0];
-                         
-                         if (oldItem.image.url === imgSrc) {
-                             alert("The selected image is identical to the current one.");
-                             return;
-                         }
-                         
-                         const mime = urlInput.dataset.mime || 
-                                      (imgSrc.startsWith('data:image/jpeg') ? 'image/jpeg' : 
-                                      (imgSrc.startsWith('data:image/webp') ? 'image/webp' : 
-                                      (imgSrc.startsWith('data:image/png') ? 'image/png' : 'image/png')));
-
-                         // Determine logical size in Grid Squares (1 square = 5ft)
-                        let squares = 1;
-                        if (data.type) {
-                            const lowerType = data.type.toLowerCase();
-                            if (lowerType.includes('gargantuan')) squares = 4;
-                            else if (lowerType.includes('huge')) squares = 3;
-                            else if (lowerType.includes('large')) squares = 2;
-                        }
-
-                        // Calculate actual image dimensions and adjust DPI to fit the grid
-                        let imgWidth, imgHeight, imgDpi;
-                        const dims = await getImageDimensions(imgSrc);
-
-                        if (dims && dims.width && dims.height) {
-                            imgWidth = dims.width;
-                            imgHeight = dims.height;
-                            const maxDim = Math.max(imgWidth, imgHeight);
-                            imgDpi = maxDim / squares;
-                        } else {
-                            // Fallback if dimensions cannot be determined: assume standard 150px/square
-                            imgWidth = squares * 150;
-                            imgHeight = squares * 150;
-                            imgDpi = 150;
-                        }
-
-                        const newItemId = `monster-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-                        const newItem = {
-                            ...oldItem,
-                            id: newItemId,
-                            locked: false,
-                            disableHit: false,
-                            image: {
-                                ...oldItem.image,
-                                url: imgSrc,
-                                mime: mime,
-                                width: imgWidth,
-                                height: imgHeight
-                            },
-                            grid: { dpi: imgDpi, offset: { x: 0, y: 0 } },
-                            scale: { x: 1, y: 1 }
-                        };
-                         
-                         if (!newItem.type) newItem.type = 'IMAGE';
-                         if (!newItem.scale) newItem.scale = { x: 1, y: 1 };
-                         if (!newItem.position) newItem.position = { x: 0, y: 0 };
-                         
-                         console.log("Replacing item:", oldItem.id, "with", newItem.id);
-                         
-                         await OBR.scene.items.addItems([newItem]);
-                         await OBR.scene.items.deleteItems([itemId]);
-                         
-                         showStats(data, newItemId);
-                         return; 
-                     }
-                 }
-                 alert('Image saved! Future adds of this monster will use this image.');
-                 panel.style.display = 'none';
-             } catch (e) {
-                 console.error("Error saving image (FULL LOG):", JSON.stringify(e, null, 2));
-                 const errMsg = e.message || (e.error && e.error.message) || (typeof e === 'object' ? JSON.stringify(e) : String(e));
-                 if (!isRetry) { 
-                    alert("Failed to save image. " + errMsg + "\n\nSee console (F12) for full error details.");
-                 }
-             }
-        };
-
-        if (newImage) {
-            // Process background removal
-            saveImgBtn.disabled = true;
-            saveImgBtn.innerText = "Processing...";
-            try {
-                let finalImage = await processAndRemoveBackground(newImage);
-
-                // Ensure the image URL is short enough for OBR (uploads to local server if needed)
-                try {
-                    saveImgBtn.innerText = "Verifying...";
-                    
-                    // Determine folder based on data type
-                    let folder = 'monsters';
-                    if (data && (data.rarity || data.type === 'Weapon' || data.type === 'Armor' || data.type === 'Potion')) {
-                        folder = 'items';
-                    }
-                    
-                    finalImage = await ensureShortImageUrl(finalImage, data.name, folder);
-                } catch (uploadErr) {
-                    console.error("Image optimization failed:", uploadErr);
-                    // Fallthrough to try saving anyway, though it might fail OBR validation
-                }
-                
-                await saveAndApply(finalImage);
-            } catch (e) {
-                console.error("Processing failed, using original", e);
-                // Try with original image, but still ensure it's short enough
-                try {
-                     let folder = 'monsters';
-                     if (data && (data.rarity || data.type === 'Weapon' || data.type === 'Armor' || data.type === 'Potion')) {
-                        folder = 'items';
-                     }
-                     newImage = await ensureShortImageUrl(newImage, data.name, folder);
-                } catch (ignore) {}
-                await saveAndApply(newImage);
-            } finally {
-                saveImgBtn.disabled = false;
-                saveImgBtn.innerText = "Save & Apply";
-            }
-        } else {
-            alert("Please select an image from the library or paste a URL.");
-        }
-    });
 
     if (itemId) {
         const btn = document.getElementById('update-stats-btn');
@@ -4994,6 +4782,27 @@ export function searchItems(query) {
             <small>Lvl ${spell.level !== undefined ? spell.level : '?'} ${spell.school || ''} | ${spell.source || 'SRD'}</small>
           </div>
         `).join('');
+    } else if (activeTab === 'custom') {
+        const customMonsters = getCustomMonsters();
+        const customItems = getCustomItems();
+        const customSpells = getCustomSpells();
+        const allCustom = [...customMonsters.map(m => ({...m, type: 'Monster'})), ...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
+        
+        let results = allCustom;
+        if (query) {
+            const lowerQuery = query.toLowerCase();
+            results = allCustom.filter(item => 
+                item.name.toLowerCase().includes(lowerQuery) || 
+                (item.description && item.description.toLowerCase().includes(lowerQuery))
+            );
+        }
+        
+        html = results.map((item, index) => `
+          <div class="result-card custom-card" data-index="${index}" style="border: 1px solid #ccc; padding: 12px; margin-bottom: 5px; cursor: pointer; background: #f0f8ff; color: #000; border-radius: 4px;">
+            <strong>${item.name}</strong> [${item.type}]<br>
+            <small>${item.type === 'Monster' ? `HP: ${item.hp || '?'}, AC: ${item.ac || '?'}, CR: ${item.cr || '?'}` : item.type === 'Spell' ? `Lvl ${item.level !== undefined ? item.level : '?'} ${item.school || ''}` : item.type || ''}</small>
+          </div>
+        `).join('');
     }
 
     resultsDiv.innerHTML = html;
@@ -5059,6 +4868,7 @@ export function searchItems(query) {
                         // 3. Save this image association for future adds of this monster
                         const safeUrl = await ensureShortImageUrl(selectedItem.image.url);
                         localStorage.setItem(`monster_image_${monster.name}`, safeUrl);
+                        addUsedImageForEntry(monster.name, safeUrl);
                         saveToBackend(); // Sync to backend immediately
 
                         // 4. Update the item
@@ -5172,6 +4982,17 @@ export function searchItems(query) {
             const results = searchSpells(query);
             const spell = results[index];
             showStats(spell);
+        } else if (activeTab === 'custom') {
+            const customMonsters = getCustomMonsters();
+            const customItems = getCustomItems();
+            const customSpells = getCustomSpells();
+            const allCustom = [...customMonsters.map(m => ({...m, type: 'Monster'})), ...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
+            const item = allCustom[index];
+            if (item.type === 'Monster') {
+                await handleMonsterClick(item);
+            } else {
+                showStats(item);
+            }
         }
       });
     });
