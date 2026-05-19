@@ -608,26 +608,26 @@ function parseStatBlock(text) {
     }
   }
   
-  // 2. Parse Type (like "Medium Humanoid, Lawful Evil")
-  const typeMatch = normalized.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s]+?)(?:,|$)/i);
+  // 2. Parse Type (like "Gargantuan elemental (deity avatar), neutral")
+  const typeMatch = normalized.match(/(Small|Medium|Large|Huge|Gargantuan|Tiny)\s+([a-zA-Z\s\(\)]+?)(?:,|$)/i);
   if (typeMatch) {
     result.type = typeMatch[0].trim();
   }
   
-  // 3. Parse AC - multiple formats
-  const acMatch = normalized.match(/(?:Armor Class|AC)\s*(?:\(.*?\)\s*)?(\d+)/i);
+  // 3. Parse AC - multiple formats (with or without colon)
+  const acMatch = normalized.match(/(?:Armor Class|AC)\s*:?\s*(?:\(.*?\)\s*)?(\d+)/i);
   if (acMatch) {
     result.ac = parseInt(acMatch[1], 10);
   }
   
-  // 4. Parse HP - multiple formats
-  const hpMatch = normalized.match(/(?:Hit Points|HP)\s*(?:\(.*?\)\s*)?(\d+)/i);
+  // 4. Parse HP - multiple formats (with or without colon)
+  const hpMatch = normalized.match(/(?:Hit Points|HP)\s*:?\s*(?:\(.*?\)\s*)?(\d+)/i);
   if (hpMatch) {
     result.hp = parseInt(hpMatch[1], 10);
   }
   
-  // 5. Parse CR - multiple formats
-  const crMatch = normalized.match(/(?:Challenge|CR)\s*(?:\d+ XP)?\s*([0-9\/\-—]+)/i);
+  // 5. Parse CR - multiple formats (with or without colon, with or without XP)
+  const crMatch = normalized.match(/(?:Challenge Rating|Challenge|CR)\s*:?\s*(?:\d+(?:,\d+)*\s*XP)?\s*([0-9\/\-—]+)/i);
   if (crMatch) {
     result.cr = crMatch[1].trim();
   }
