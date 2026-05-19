@@ -639,28 +639,6 @@ function parseStatBlock(text) {
   return result;
 }
 
-// Helper to auto-fill form fields from stat block
-function autoFillFromStatBlock() {
-  const text = editorDesc.value;
-  const parsed = parseStatBlock(text);
-  
-  if (parsed.name && !editorName.value) {
-    editorName.value = parsed.name;
-  }
-  if (parsed.type && !editorType.value) {
-    editorType.value = parsed.type;
-  }
-  if (parsed.ac !== undefined && !editorAc.value) {
-    editorAc.value = parsed.ac;
-  }
-  if (parsed.hp !== undefined && !editorHp.value) {
-    editorHp.value = parsed.hp;
-  }
-  if (parsed.cr && !editorCr.value) {
-    editorCr.value = parsed.cr;
-  }
-}
-
 // Custom Data Helpers
 function getCustomMonsters() {
     try { return JSON.parse(localStorage.getItem('dnd_extension_custom_monsters') || '[]'); } catch (e) { return []; }
@@ -2501,6 +2479,28 @@ export function searchItems(query) {
   const editorSpellSize = document.getElementById('editor-spell-size');
   const editorCastShapeBtn = document.getElementById('editor-cast-shape-btn');
   const editorSpellDesc = document.getElementById('editor-spell-desc');
+
+  // Helper to auto-fill form fields from stat block
+  function autoFillFromStatBlock() {
+    const text = editorDesc.value;
+    const parsed = parseStatBlock(text);
+    
+    if (parsed.name && !editorName.value) {
+      editorName.value = parsed.name;
+    }
+    if (parsed.type && !editorType.value) {
+      editorType.value = parsed.type;
+    }
+    if (parsed.ac !== undefined && !editorAc.value) {
+      editorAc.value = parsed.ac;
+    }
+    if (parsed.hp !== undefined && !editorHp.value) {
+      editorHp.value = parsed.hp;
+    }
+    if (parsed.cr && !editorCr.value) {
+      editorCr.value = parsed.cr;
+    }
+  }
 
   // Fix PDF Copy-Paste Artifacts (e.g. "Text%With%Percents" instead of spaces)
   const cleanPdfPaste = (e) => {
