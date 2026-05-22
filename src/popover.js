@@ -4910,6 +4910,100 @@ export function searchItems(query) {
         }
     }
 
+    // Helper: Check if Dice+ is ready
+    async function checkDicePlusReady() {
+        if (!OBR.broadcast) return false;
+        const requestId = crypto.randomUUID();
+        return new Promise((resolve) => {
+            const unsubscribe = OBR.broadcast.onMessage("dice-plus/isReady", (event) => {
+                const data = event.data;
+                if ('ready' in data && data.requestId === requestId) {
+                    unsubscribe();
+                    resolve(true);
+                }
+            });
+            OBR.broadcast.sendMessage("dice-plus/isReady", {
+                requestId,
+                timestamp: Date.now()
+            }, { destination: 'ALL' });
+            setTimeout(() => {
+                unsubscribe();
+                resolve(false);
+            }, 1000);
+        });
+    }
+
+    // Helper: Roll with Dice+
+    async function rollWithDicePlus(diceNotation, label) {
+        const MY_EXTENSION_ID = "com.dnd-extension";
+        const rollId = `roll_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        const playerId = await OBR.player.getId();
+        const playerName = await OBR.player.getName();
+        
+        return new Promise((resolve, reject) => {
+            const unsubscribeResult = OBR.broadcast.onMessage(`${MY_EXTENSION_ID}/roll-result`, (event) => {
+                const result = event.data;
+                if (result.rollId === rollId) {
+                    unsubscribeResult();
+                    unsubscribeError();
+                    resolve(result);
+                }
+            });
+            
+            const unsubscribeError = OBR.broadcast.onMessage(`${MY_EXTENSION_ID}/roll-error`, (event) => {
+                const error = event.data;
+                if (error.rollId === rollId) {
+                    unsubscribeResult();
+                    unsubscribeError();
+                    reject(error);
+                }
+            });
+            
+            OBR.broadcast.sendMessage("dice-plus/roll-request", {
+                rollId,
+                playerId,
+                playerName,
+                rollTarget: 'everyone',
+                diceNotation: diceNotation + (label ? ` # ${label}` : ''),
+                showResults: true,
+                timestamp: Date.now(),
+                source: MY_EXTENSION_ID
+            }, { destination: 'ALL' });
+        });
+    }
+
+    // Helper: Check if JustDices is ready
+    async function checkJustDicesReady() {
+        if (!OBR.broadcast) return false;
+        return true; // Assume it's there if we get a response, use timeout
+    }
+
+    // Helper: Roll with JustDices
+    async function rollWithJustDices(expression, label) {
+        const callId = `call_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        return new Promise((resolve, reject) => {
+            const unsubscribe = OBR.broadcast.onMessage("justdices.api.response", (evt) => {
+                const res = evt.data;
+                if (res.callId !== callId) return;
+                unsubscribe();
+                if (res.ok) {
+                    resolve(res);
+                } else {
+                    reject(res);
+                }
+            });
+            OBR.broadcast.sendMessage("justdices.api.request", {
+                callId,
+                expression: `/r ${expression}${label ? ` ${label}` : ''}`,
+                showInLogs: true
+            }, { destination: 'ALL' });
+            setTimeout(() => {
+                unsubscribe();
+                reject({ error: 'API_TIMEOUT' });
+            }, 3000);
+        });
+    }
+
     // Roll Handler Logic (Defined here to close over currentActions)
     const handleRoll = async (e) => {
         // Find closest button (in case of icon clicks)
@@ -4923,10 +5017,40 @@ export function searchItems(query) {
         if (type === 'ability' || type === 'save-check') {
              const name = btn.getAttribute('data-name');
              const mod = parseInt(btn.getAttribute('data-mod'), 10);
-             const roll = Math.floor(Math.random() * 20) + 1;
-             const total = roll + mod;
-             const crit = roll === 20 ? ' (NAT 20!)' : (roll === 1 ? ' (NAT 1!)' : '');
-             const resultText = `${name} ${type === 'ability' ? 'Check' : 'Save'}: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${crit}`;
+             const diceNotation = `1d20${mod >= 0 ? '+' : ''}${mod}`;
+             const label = `${name} ${type === 'ability' ? 'Check' : 'Save'}`;
+             
+             // Try Dice+ first
+             let result = null;
+             try {
+                 const dicePlusReady = await checkDicePlusReady();
+                 if (dicePlusReady) {
+                     result = await rollWithDicePlus(diceNotation, label);
+                 }
+             } catch (err) {
+                 console.warn("Dice+ roll failed, trying JustDices...", err);
+                 try {
+                     result = await rollWithJustDices(diceNotation, label);
+                 } catch (err2) {
+                     console.warn("JustDices roll failed, using local roll...", err2);
+                 }
+             }
+             
+             let resultText = '';
+             if (result) {
+                 if (result.result && result.result.totalValue) {
+                     resultText = `${label}: ${result.result.rollSummary}`;
+                 } else if (result.data && result.data.total !== undefined) {
+                     resultText = `${label}: ${result.expressionOut} = ${result.data.total}`;
+                 }
+             }
+             
+             if (!resultText) {
+                 const roll = Math.floor(Math.random() * 20) + 1;
+                 const total = roll + mod;
+                 const crit = roll === 20 ? ' (NAT 20!)' : (roll === 1 ? ' (NAT 1!)' : '');
+                 resultText = `${name} ${type === 'ability' ? 'Check' : 'Save'}: ${roll} ${mod >= 0 ? '+' : ''}${mod} = ${total}${crit}`;
+             }
              
              // Broadcast
              try {
@@ -4953,10 +5077,37 @@ export function searchItems(query) {
         let resultText = '';
         
         if (type === 'attack') {
-            const roll = Math.floor(Math.random() * 20) + 1;
-            const rollTotal = roll + action.toHit;
-            const crit = roll === 20 ? ' (CRIT!)' : (roll === 1 ? ' (FAIL!)' : '');
-            resultText = `${action.name} Attack: ${roll} + ${action.toHit} = ${rollTotal}${crit}`;
+            const diceNotation = `1d20+${action.toHit}`;
+            const label = `${action.name} Attack`;
+            let result = null;
+            try {
+                const dicePlusReady = await checkDicePlusReady();
+                if (dicePlusReady) {
+                    result = await rollWithDicePlus(diceNotation, label);
+                }
+            } catch (err) {
+                console.warn("Dice+ roll failed, trying JustDices...", err);
+                try {
+                    result = await rollWithJustDices(diceNotation, label);
+                } catch (err2) {
+                    console.warn("JustDices roll failed, using local roll...", err2);
+                }
+            }
+            
+            if (result) {
+                if (result.result && result.result.totalValue) {
+                    resultText = `${label}: ${result.result.rollSummary}`;
+                } else if (result.data && result.data.total !== undefined) {
+                    resultText = `${label}: ${result.expressionOut} = ${result.data.total}`;
+                }
+            }
+            
+            if (!resultText) {
+                const roll = Math.floor(Math.random() * 20) + 1;
+                const rollTotal = roll + action.toHit;
+                const crit = roll === 20 ? ' (CRIT!)' : (roll === 1 ? ' (FAIL!)' : '');
+                resultText = `${action.name} Attack: ${roll} + ${action.toHit} = ${rollTotal}${crit}`;
+            }
         } else if (type === 'damage') {
             const damageIndex = parseInt(btn.getAttribute('data-damage-index'), 10);
             const damageInfo = action.damages[damageIndex];
@@ -4967,11 +5118,37 @@ export function searchItems(query) {
             }
 
             if (damageInfo) {
-                const result = rollDice(damageInfo.dice);
+                const label = `${action.name} ${damageInfo.type} Damage`;
+                let result = null;
+                try {
+                    const dicePlusReady = await checkDicePlusReady();
+                    if (dicePlusReady) {
+                        result = await rollWithDicePlus(damageInfo.dice, label);
+                    }
+                } catch (err) {
+                    console.warn("Dice+ roll failed, trying JustDices...", err);
+                    try {
+                        result = await rollWithJustDices(damageInfo.dice, label);
+                    } catch (err2) {
+                        console.warn("JustDices roll failed, using local roll...", err2);
+                    }
+                }
+                
                 if (result) {
-                    resultText = `${action.name} Damage: ${result.total} (${result.formula}) ${damageInfo.type}`;
-                } else {
-                    resultText = `Error rolling ${damageInfo.dice}`;
+                    if (result.result && result.result.totalValue) {
+                        resultText = `${label}: ${result.result.rollSummary}`;
+                    } else if (result.data && result.data.total !== undefined) {
+                        resultText = `${label}: ${result.expressionOut} = ${result.data.total}`;
+                    }
+                }
+                
+                if (!resultText) {
+                    const localResult = rollDice(damageInfo.dice);
+                    if (localResult) {
+                        resultText = `${action.name} Damage: ${localResult.total} (${localResult.formula}) ${damageInfo.type}`;
+                    } else {
+                        resultText = `Error rolling ${damageInfo.dice}`;
+                    }
                 }
             } else {
                  resultText = "Error: Damage info not found";
@@ -4982,11 +5159,37 @@ export function searchItems(query) {
             
             if (spell) {
                 if (spell.dice) {
-                    const result = rollDice(spell.dice);
+                    const label = `${spell.name}`;
+                    let result = null;
+                    try {
+                        const dicePlusReady = await checkDicePlusReady();
+                        if (dicePlusReady) {
+                            result = await rollWithDicePlus(spell.dice, label);
+                        }
+                    } catch (err) {
+                        console.warn("Dice+ roll failed, trying JustDices...", err);
+                        try {
+                            result = await rollWithJustDices(spell.dice, label);
+                        } catch (err2) {
+                            console.warn("JustDices roll failed, using local roll...", err2);
+                        }
+                    }
+                    
                     if (result) {
-                        resultText = `${action.name} Casts ${spell.name}: ${result.total} (${result.formula})`;
-                    } else {
-                        resultText = `Error rolling ${spell.dice}`;
+                        if (result.result && result.result.totalValue) {
+                            resultText = `${action.name} Casts ${spell.name}: ${result.result.rollSummary}`;
+                        } else if (result.data && result.data.total !== undefined) {
+                            resultText = `${action.name} Casts ${spell.name}: ${result.expressionOut} = ${result.data.total}`;
+                        }
+                    }
+                    
+                    if (!resultText) {
+                        const localResult = rollDice(spell.dice);
+                        if (localResult) {
+                            resultText = `${action.name} Casts ${spell.name}: ${localResult.total} (${localResult.formula})`;
+                        } else {
+                            resultText = `Error rolling ${spell.dice}`;
+                        }
                     }
                 } else {
                     resultText = `Casts ${spell.name} (${spell.label || 'Spell'})`;
