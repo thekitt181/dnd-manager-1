@@ -4941,20 +4941,26 @@ export function searchItems(query) {
         const playerName = await OBR.player.getName();
         
         return new Promise((resolve, reject) => {
-            const unsubscribeResult = OBR.broadcast.onMessage(`${MY_EXTENSION_ID}/roll-result`, (event) => {
+            let unsubscribeResult = null;
+            let unsubscribeError = null;
+            
+            const cleanup = () => {
+                if (unsubscribeResult) unsubscribeResult();
+                if (unsubscribeError) unsubscribeError();
+            };
+            
+            unsubscribeResult = OBR.broadcast.onMessage(`${MY_EXTENSION_ID}/roll-result`, (event) => {
                 const result = event.data;
                 if (result.rollId === rollId) {
-                    unsubscribeResult();
-                    unsubscribeError();
+                    cleanup();
                     resolve(result);
                 }
             });
             
-            const unsubscribeError = OBR.broadcast.onMessage(`${MY_EXTENSION_ID}/roll-error`, (event) => {
+            unsubscribeError = OBR.broadcast.onMessage(`${MY_EXTENSION_ID}/roll-error`, (event) => {
                 const error = event.data;
                 if (error.rollId === rollId) {
-                    unsubscribeResult();
-                    unsubscribeError();
+                    cleanup();
                     reject(error);
                 }
             });
@@ -4969,6 +4975,12 @@ export function searchItems(query) {
                 timestamp: Date.now(),
                 source: MY_EXTENSION_ID
             }, { destination: 'ALL' });
+            
+            // Add a timeout for the roll (5 seconds)
+            setTimeout(() => {
+                cleanup();
+                reject({ error: 'TIMEOUT' });
+            }, 5000);
         });
     }
 
@@ -5004,8 +5016,17 @@ export function searchItems(query) {
         });
     }
 
+    // Track if a roll is in progress
+    let rollInProgress = false;
+    
     // Roll Handler Logic (Defined here to close over currentActions)
     const handleRoll = async (e) => {
+        if (rollInProgress) {
+            console.warn('Roll already in progress, skipping...');
+            return;
+        }
+        rollInProgress = true;
+        try {
         // Find closest button (in case of icon clicks)
         const btn = e.target.closest('.roll-btn');
         if (!btn) return;
@@ -5245,6 +5266,9 @@ export function searchItems(query) {
                 alert(resultText);
             }
         } catch (e) { alert(resultText); }
+        } finally {
+            rollInProgress = false;
+        }
     };
 
     // Attach Listeners Helper
