@@ -2653,17 +2653,30 @@ export function searchItems(query) {
       console.log("No spawn position in URL");
   }
   
-  // Check if current user is GM
+  // Check if current user is GM and get player ID
   let isGM = true; // Default to true for local development
+  let playerId = "local_player"; // Default for local development
   try {
       if (window.self !== window.top && OBR && OBR.player) {
           const role = await OBR.player.getRole();
           isGM = role === 'GM';
+          if (OBR.player.id) {
+              playerId = OBR.player.id;
+          }
       }
   } catch (e) {
-      console.warn("Could not get player role, defaulting to GM", e);
+      console.warn("Could not get player info, using defaults", e);
   }
   console.log("isGM:", isGM);
+  console.log("playerId:", playerId);
+  
+  // Helper functions to get/set per-player settings
+  function getSetting(key) {
+      return localStorage.getItem(`dnd_extension_${playerId}_${key}`);
+  }
+  function setSetting(key, value) {
+      localStorage.setItem(`dnd_extension_${playerId}_${key}`, value);
+  }
 
   const app = document.getElementById('app');
   app.innerHTML = `
@@ -2864,10 +2877,10 @@ export function searchItems(query) {
 
   // Load hide settings only if GM
   if (isGM) {
-      hideNameCheckbox.checked = localStorage.getItem('dnd_extension_hide_name') === 'true';
-      hideHpCheckbox.checked = localStorage.getItem('dnd_extension_hide_hp') === 'true';
-      hideAcCheckbox.checked = localStorage.getItem('dnd_extension_hide_ac') === 'true';
-      hideCrCheckbox.checked = localStorage.getItem('dnd_extension_hide_cr') === 'true';
+      hideNameCheckbox.checked = getSetting('hide_name') === 'true';
+      hideHpCheckbox.checked = getSetting('hide_hp') === 'true';
+      hideAcCheckbox.checked = getSetting('hide_ac') === 'true';
+      hideCrCheckbox.checked = getSetting('hide_cr') === 'true';
   }
 
   const updateAllTokensOnMap = async () => {
@@ -2965,19 +2978,19 @@ export function searchItems(query) {
 
   if (isGM) {
       hideNameCheckbox.addEventListener('change', () => {
-          localStorage.setItem('dnd_extension_hide_name', hideNameCheckbox.checked);
+          setSetting('hide_name', hideNameCheckbox.checked);
           updateAllTokensOnMap();
       });
       hideHpCheckbox.addEventListener('change', () => {
-          localStorage.setItem('dnd_extension_hide_hp', hideHpCheckbox.checked);
+          setSetting('hide_hp', hideHpCheckbox.checked);
           updateAllTokensOnMap();
       });
       hideAcCheckbox.addEventListener('change', () => {
-          localStorage.setItem('dnd_extension_hide_ac', hideAcCheckbox.checked);
+          setSetting('hide_ac', hideAcCheckbox.checked);
           updateAllTokensOnMap();
       });
       hideCrCheckbox.addEventListener('change', () => {
-          localStorage.setItem('dnd_extension_hide_cr', hideCrCheckbox.checked);
+          setSetting('hide_cr', hideCrCheckbox.checked);
           updateAllTokensOnMap();
       });
   }
