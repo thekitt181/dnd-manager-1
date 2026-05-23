@@ -21,5 +21,18 @@ export default defineConfig({
         secure: false,
       }
     }
+  },
+  build: {
+    chunkSizeWarningLimit: 1000, // 1MB limit
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'pdfjs': ['pdfjs-dist'],
+          'monsters-data': ['./src/monsters.json'],
+          'items-data': ['./src/items.json'],
+          'spells-data': ['./src/spells.json']
+        }
+      }
+    }
   }
 });

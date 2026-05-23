@@ -1,5 +1,7 @@
 import monsters from './monsters.json';
 import items from './items.json';
+import SPELL_DATA from './spells.json';
+import Tesseract from 'tesseract.js';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
 import * as pdfjsLib from 'pdfjs-dist';
 
@@ -11,95 +13,6 @@ const CHANNEL_ID = 'com.dnd-extension.rolls';
 let spawnPosition = null; // Global spawn position from URL params
 
 const ICON_SVG = "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/master/svgs/solid/dice-d20.svg";
-
-// Common Spell Data (Damage, Save, AoE)
-const SPELL_DATA = {
-    'burning hands': { level: 1, damage: '3d6', type: 'fire', save: 'DEX', aoe: { size: 15, type: 'cone' } },
-    'color spray': { level: 1, damage: '6d10', type: 'radiant', aoe: { size: 15, type: 'cone' } }, // HP based, but treat as dice for now
-    'cone of cold': { level: 5, damage: '8d8', type: 'cold', save: 'CON', aoe: { size: 60, type: 'cone' } },
-    'fear': { level: 3, save: 'WIS', aoe: { size: 30, type: 'cone' } },
-    'prismatic spray': { level: 7, damage: '10d6', type: 'fire', save: 'DEX', aoe: { size: 60, type: 'cone' } }, // Variable damage, pick one
-    'fireball': { level: 3, damage: '8d6', type: 'fire', save: 'DEX', aoe: { size: 20, type: 'radius' } },
-    'delayed blast fireball': { level: 7, damage: '12d6', type: 'fire', save: 'DEX', aoe: { size: 20, type: 'radius' } },
-    'darkness': { level: 2, aoe: { size: 15, type: 'radius' } },
-    'fog cloud': { level: 1, aoe: { size: 20, type: 'radius' } },
-    'shatter': { level: 2, damage: '3d8', type: 'thunder', save: 'CON', aoe: { size: 10, type: 'radius' } },
-    'sleep': { level: 1, damage: '5d8', type: 'psychic', aoe: { size: 20, type: 'radius' } }, // HP based
-    'stinking cloud': { level: 3, save: 'CON', aoe: { size: 20, type: 'radius' } },
-    'cloudkill': { level: 5, damage: '5d8', type: 'poison', save: 'CON', aoe: { size: 20, type: 'radius' } },
-    'entangle': { level: 1, save: 'STR', aoe: { size: 20, type: 'radius' } }, 
-    'faerie fire': { level: 1, save: 'DEX', aoe: { size: 20, type: 'radius' } }, 
-    'moonbeam': { level: 2, damage: '2d10', type: 'radiant', save: 'CON', aoe: { size: 5, type: 'radius' } }, 
-    'flame strike': { level: 5, damage: '4d6', type: 'fire', secondary: { damage: '4d6', type: 'radiant' }, save: 'DEX', aoe: { size: 10, type: 'radius' } }, 
-    'ice storm': { level: 4, damage: '2d8', type: 'bludgeoning', secondary: { damage: '4d6', type: 'cold' }, save: 'DEX', aoe: { size: 20, type: 'radius' } }, 
-    'lightning bolt': { level: 3, damage: '8d6', type: 'lightning', save: 'DEX', aoe: { size: 100, type: 'line' } },
-    'gust of wind': { level: 2, save: 'STR', aoe: { size: 60, type: 'line' } },
-    'sunbeam': { level: 6, damage: '6d8', type: 'radiant', save: 'CON', aoe: { size: 60, type: 'line' } },
-    'thunderwave': { level: 1, damage: '2d8', type: 'thunder', save: 'CON', aoe: { size: 15, type: 'cube' } },
-    'web': { level: 2, save: 'DEX', aoe: { size: 20, type: 'cube' } }, 
-    'hypnotic pattern': { level: 3, save: 'WIS', aoe: { size: 30, type: 'cube' } },
-    'slow': { level: 3, save: 'WIS', aoe: { size: 40, type: 'cube' } },
-    'reverse gravity': { level: 7, save: 'DEX', aoe: { size: 50, type: 'cylinder' } },
-    'insect plague': { level: 5, damage: '4d10', type: 'piercing', save: 'CON', aoe: { size: 20, type: 'radius' } },
-    'cloud of daggers': { level: 2, damage: '4d4', type: 'slashing', aoe: { size: 5, type: 'cube' } },
-    'spike growth': { level: 2, damage: '2d4', type: 'piercing', aoe: { size: 20, type: 'radius' } },
-    'spirit guardians': { level: 3, damage: '3d8', type: 'radiant', save: 'WIS', aoe: { size: 15, type: 'radius' } },
-    'silence': { level: 2, aoe: { size: 20, type: 'radius' } },
-    'antimagic field': { level: 8, aoe: { size: 10, type: 'radius' } },
-    'circle of death': { level: 6, damage: '8d6', type: 'necrotic', save: 'CON', aoe: { size: 60, type: 'radius' } },
-    'meteor swarm': { level: 9, damage: '20d6', type: 'fire', secondary: { damage: '20d6', type: 'bludgeoning' }, save: 'DEX', aoe: { size: 40, type: 'radius' } },
-    'grease': { level: 1, save: 'DEX', aoe: { size: 10, type: 'cube' } },
-    'arms of hadar': { level: 1, damage: '2d6', type: 'necrotic', save: 'STR', aoe: { size: 10, type: 'radius' } },
-    'hunger of hadar': { level: 3, damage: '2d6', type: 'cold', aoe: { size: 20, type: 'radius' } },
-    'sleet storm': { level: 3, save: 'DEX', aoe: { size: 40, type: 'radius' } },
-    'storm of vengeance': { level: 9, damage: '2d6', type: 'thunder', save: 'CON', aoe: { size: 360, type: 'radius' } },
-    'earthquake': { level: 8, damage: '10d6', type: 'bludgeoning', save: 'DEX', aoe: { size: 100, type: 'radius' } },
-    'incendiary cloud': { level: 8, damage: '10d8', type: 'fire', save: 'DEX', aoe: { size: 20, type: 'radius' } },
-    'sunburst': { level: 8, damage: '12d6', type: 'radiant', save: 'CON', aoe: { size: 60, type: 'radius' } },
-    'wall of fire': { level: 4, damage: '5d8', type: 'fire', save: 'DEX', aoe: { size: 60, type: 'wall' } },
-    'hold monster': { level: 5, save: 'WIS' },
-    'hold person': { level: 2, save: 'WIS' },
-    'blight': { level: 4, damage: '8d8', type: 'necrotic', save: 'CON' },
-    'disintegrate': { level: 6, damage: '10d40', type: 'force', save: 'DEX' },
-    'finger of death': { level: 7, damage: '7d8+30', type: 'necrotic', save: 'CON' },
-    'eldritch blast': { level: 0, damage: '1d10', type: 'force', attack: true },
-    'fire bolt': { level: 0, damage: '1d10', type: 'fire', attack: true },
-    'ray of frost': { level: 0, damage: '1d8', type: 'cold', attack: true },
-    'acid splash': { level: 0, damage: '1d6', type: 'acid', save: 'DEX' },
-    'poison spray': { level: 0, damage: '1d12', type: 'poison', save: 'CON' },
-    'sacred flame': { level: 0, damage: '1d8', type: 'radiant', save: 'DEX' },
-    'toll the dead': { level: 0, damage: '1d8', type: 'necrotic', save: 'WIS' },
-    'vicious mockery': { level: 0, damage: '1d4', type: 'psychic', save: 'WIS' },
-    'scorching ray': { level: 2, damage: '2d6', type: 'fire', attack: true },
-    'magic missile': { level: 1, damage: '1d4+1', type: 'force' },
-    'detect magic': { level: 1 },
-    'detect thoughts': { level: 2 },
-    'fly': { level: 3 },
-    'levitate': { level: 2 },
-    'invisibility': { level: 2 },
-    'mage armor': { level: 1 },
-    'shield': { level: 1 },
-    'misty step': { level: 2 },
-    'dimension door': { level: 4 },
-    'counterspell': { level: 3 },
-    'dispel magic': { level: 3 },
-    'suggestion': { level: 2, save: 'WIS' },
-    'charm person': { level: 1, save: 'WIS' },
-    'command': { level: 1, save: 'WIS' },
-    'scrying': { level: 5, save: 'WIS' },
-    'true seeing': { level: 6 },
-    'teleport': { level: 7 },
-    'plane shift': { level: 7 },
-    'mage hand': { level: 0 },
-    'prestidigitation': { level: 0 },
-    'melf\'s acid arrow': { level: 2, damage: '4d4', type: 'acid', secondary: { damage: '2d4', type: 'acid' }, attack: true },
-    'mirror image': { level: 2 },
-    'animate dead': { level: 3 },
-    'globe of invulnerability': { level: 6, aoe: { size: 10, type: 'radius' } },
-    'dominate monster': { level: 8, save: 'WIS' },
-    'power word stun': { level: 8 }, // HP threshold
-    'power word kill': { level: 9 }, // HP threshold
-};
 
 // Helper: Normalize string for fuzzy matching (handles OCR errors)
 function normalizeSpellName(str) {
@@ -576,6 +489,38 @@ function parseSavingThrows(text) {
   return saves;
 }
 
+// Helper: Clean a single line of OCR artifacts
+function cleanOcrLine(line) {
+  if (!line) return '';
+  let clean = line;
+  
+  // Step 1: Remove non-ASCII characters and common garbage symbols
+  clean = clean.replace(/[^\x00-\x7F]/g, ' ');
+  clean = clean.replace(/[|/\\[\]{}<>]/g, ' ');
+  clean = clean.replace(/\s*[=+\-*#@!$%^&*()_+~`]+\s*/g, ' ');
+  
+  // Step 2: Fix specific OCR mistakes from the user's example
+  clean = clean.replace(/\bToiLET\b/gi, 'Toilet');
+  clean = clean.replace(/\bMimic ls\b/gi, 'Mimic');
+  clean = clean.replace(/\bneutral ox\b/gi, 'neutral evil');
+  clean = clean.replace(/\bneutral ox\?\b/gi, 'neutral evil');
+  clean = clean.replace(/\bporcelain flesh\b/gi, 'porcelain armor');
+  clean = clean.replace(/\bStats\/Sample Lore by @Snickelsox.*$/gi, '');
+  
+  // Step 3: Remove garbage that doesn't look like D&D stat block content
+  // If line is mostly symbols/garbage, return empty string
+  const alphaCount = (clean.match(/[a-zA-Z]/g) || []).length;
+  const totalCount = clean.length;
+  if (totalCount > 0 && alphaCount / totalCount < 0.3) {
+    return ''; // Less than 30% letters → probably garbage
+  }
+  
+  // Step 4: Collapse multiple spaces and trim
+  clean = clean.replace(/\s+/g, ' ').trim();
+  
+  return clean;
+}
+
 // Helper: Parse CR string to number
 function parseCR(crString) {
   if (!crString) return -1;
@@ -599,28 +544,15 @@ function parseStatBlock(text) {
   
   const knownDeityNames = ['Anansi', 'Baba Yaga', 'Batara Kala', 'Freyja', 'Fuji', 'Hekate', 'Inti', 'Ishtar', 'Mazu', 'Nayenezgani', 'Shango', 'Shiva', 'Tchernobog', 'Tengri', 'Turan', 'Viviene'];
   
-  // Normalize common OCR issues, weird characters, and spacing
-  const normalized = text
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+/g, ' ') // Multiple spaces to single
-    .replace(/\n\s*\n/g, '\n') // Multiple newlines to single
-    .replace(/\u2013/g, '-') // En dash to hyphen
-    .replace(/\u2014/g, '-') // Em dash to hyphen
-    .replace(/\u2019/g, "'") // Smart single quote to regular
-    .replace(/\u201C/g, '"') // Smart double quote left
-    .replace(/\u201D/g, '"') // Smart double quote right
-    .replace(/\bArmour\b/gi, 'Armor') // British spelling to American
-    .replace(/\s*[-–—]\s*/g, ' ') // Replace " - " with single space
-    .replace(/\b(f t\.?|ft\.)\b/gi, 'ft.') // Fix "f t." to "ft."
-    .replace(/\b(en d|end)\b/gi, 'end') // Fix "en d" to "end"
-    .replace(/\b(ra gon|dragon)\b/gi, 'dragon') // Fix "ra gon" to dragon
-    .replace(/\b(5 - 6|5-6)\b/g, '5-6') // Fix "5 - 6" to "5-6"
-    .trim();
+  // Clean each line individually with cleanOcrLine!
+  const cleanLines = text.split('\n').map(line => cleanOcrLine(line)).filter(line => line.length > 0);
+  const normalized = cleanLines.join(' '); // Join all clean lines into a single string
   
-  console.log("parseStatBlock - normalized text:", normalized);
+  console.log('parseStatBlock - cleaned text:', normalized.substring(0, 500));
   
   // 1. Parse Name and Type - PRIORITIZE KNOWN DEITY NAMES FIRST!
-  const allLines = normalized.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+  // Split into lines (OCR might merge lines)
+  const allLines = normalized.split(/(?<=\.)\s+(?=[A-Z])/g).join('\n').split('\n').map(line => line.trim()).filter(line => line.length > 0);
   let lines = allLines;
   
   // FIRST: Try to find the name using the BEST patterns FIRST
@@ -870,14 +802,61 @@ async function extractTextFromPDF(file) {
           // Sort lines by Y (top to bottom)
           const sortedYs = Array.from(linesMap.keys()).sort((a, b) => b - a);
           
-          // For each line: sort items by X and join to make text
-          const pageLines = [];
+          // Get page height to calculate header/footer
+          const viewport = page.getViewport({ scale: 1.0 });
+          const pageHeight = viewport.height;
+          
+          // For each line: sort items by X and join to make text, skip header/footer
+          let pageLines = [];
           for (const y of sortedYs) {
+            // Skip if line is in header (top 10%) or footer (bottom 10%)
+            const relativeY = y / pageHeight;
+            if (relativeY > 0.9 || relativeY < 0.1) {
+              continue;
+            }
+            
             const items = linesMap.get(y);
             items.sort((a, b) => a.transform[4] - b.transform[4]);
             const lineText = items.map(i => i.str).join('').trim();
-            if (lineText.length > 0) {
+            
+            // Skip lines that look like page numbers or footers
+            const isPageNumber = /^\s*\d+\s*$/.test(lineText); // Just a number
+            const isFooter = /^page\s+\d+$/i.test(lineText) || /^chapter\s+\d+$/i.test(lineText);
+            
+            if (lineText.length > 0 && !isPageNumber && !isFooter) {
               pageLines.push(lineText);
+            }
+          }
+          
+          // If page has very little text, try OCR!
+          let totalChars = pageLines.reduce((sum, line) => sum + line.length, 0);
+          if (totalChars < 50) {
+            console.log(`Page ${i} has only ${totalChars} chars, trying OCR...`);
+            
+            try {
+              // Render page to canvas
+              const viewport = page.getViewport({ scale: 2.0 });
+              const canvas = document.createElement('canvas');
+              const context = canvas.getContext('2d');
+              canvas.width = viewport.width;
+              canvas.height = viewport.height;
+              
+              await page.render({ canvasContext: context, viewport: viewport }).promise;
+              
+              // Use Tesseract to OCR the canvas
+              const result = await Tesseract.recognize(
+                canvas,
+                'eng',
+                {
+                  logger: m => console.log(`OCR progress (page ${i}):`, m)
+                }
+              );
+              
+              const ocrText = result.data.text;
+              pageLines = ocrText.split('\n').filter(line => line.trim().length > 0);
+              console.log(`OCR got ${pageLines.length} lines, ${ocrText.length} chars`);
+            } catch (ocrErr) {
+              console.error(`OCR failed for page ${i}:`, ocrErr);
             }
           }
           
@@ -913,12 +892,16 @@ function extractMonstersFromPDFText(text) {
   const extractedMonsters = [];
   
   const sizeKeywords = ['Small', 'Medium', 'Large', 'Huge', 'Gargantuan', 'Tiny'];
-  const allSizeKeywords = [...sizeKeywords, ...sizeKeywords.map(k => k.toLowerCase())];
+  const creatureTypes = [
+    'aberration', 'beast', 'celestial', 'construct', 'dragon', 'elemental', 
+    'fey', 'fiend', 'giant', 'humanoid', 'monstrosity', 'ooze', 'plant', 'undead'
+  ];
   
   const stopKeywords = [
     'CREATURE CODEX', 'TOME OF BEASTS', 'MONSTER MANUAL', 
     'VOLO\'S GUIDE', 'MORDENKAINEN\'S', 'XANATHAR\'S',
-    'TALES FROM THE YAWNING PORTAL', 'GHOSTS OF SALTMARSH'
+    'TALES FROM THE YAWNING PORTAL', 'GHOSTS OF SALTMARSH',
+    'APPENDIX', 'INDEX', 'CHAPTER', 'ENCOUNTERS'
   ];
   
   // Create a list of known monster names from our built-in monsters.json!
@@ -933,7 +916,7 @@ function extractMonstersFromPDFText(text) {
   
   const rawLines = text.split(/\n+/);
   for (let line of rawLines) {
-    let trimmedLine = line.trim();
+    let trimmedLine = cleanOcrLine(line.trim()); // Clean the line with our helper!
     let lineIsTopOfPage = isAtTopOfPage;
     
     // Check if LINE STARTS with markers! (they're prepended now)
@@ -946,6 +929,25 @@ function extractMonstersFromPDFText(text) {
     }
     if (trimmedLine.length === 0) continue;
     
+    // Skip garbage lines (OCR artifacts)
+    const garbagePatterns = [
+      /^[|/\\[\]{}<>()=\-+*#@!$%^&*_~`]+$/, // Only symbols
+      /^[a-zA-Z0-9]{1,3}\s*[|/\\[\]{}<>()=\-+*#@!$%^&*_~`]+$/, // Few chars + symbols
+      /^Ba\s+C2\s+CREE/i,
+      /^VEE\s+Cl\s+rE/i,
+      /^PETERS$/i
+    ];
+    
+    let isGarbage = false;
+    for (const pattern of garbagePatterns) {
+      if (pattern.test(trimmedLine)) {
+        isGarbage = true;
+        break;
+      }
+    }
+    
+    if (isGarbage) continue;
+    
     processedLines.push({
       text: trimmedLine,
       isTopOfPage: lineIsTopOfPage
@@ -957,43 +959,69 @@ function extractMonstersFromPDFText(text) {
   
   let buffer = [];
   let foundPotentialStart = false;
-  let foundAbilityScores = false;
-  let foundChallenge = false;
+  let foundMonsterNameLine = false;
+  let foundSizeTypeLine = false;
   
-  const knownDeityNames = ['Anansi', 'Baba Yaga', 'Batara Kala', 'Freyja', 'Fuji', 'Hekate', 'Inti', 'Ishtar', 'Mazu', 'Nayenezgani', 'Shango', 'Shiva', 'Tchernobog', 'Tengri', 'Turan', 'Viviene'];
-  
-  const isLikelyMonsterStart = (line, nextLines = [], knownMonsterNames, isTopOfPage) => {
+  // Check if a line is a potential monster start
+  const isMonsterStart = (line, idx, processedLines) => {
     const lineLower = line.toLowerCase();
     const lineTrimmed = line.trim();
     
-    // 1. ACCEPT if TOP-OF-PAGE AND it's a KNOWN DEITY NAME
-    if (isTopOfPage) {
-      const isKnownDeity = knownDeityNames.some(name => 
-        lineTrimmed.toLowerCase() === name.toLowerCase() || 
-        lineTrimmed.toLowerCase().includes(name.toLowerCase())
+    // Check if this line is a "size + type" line (key for monster stat blocks)
+    const hasSizeKeyword = sizeKeywords.some(kw => 
+      lineTrimmed.startsWith(kw) || lineLower.includes(` ${kw.toLowerCase()} `)
+    );
+    const hasCreatureType = creatureTypes.some(ct => lineLower.includes(ct));
+    
+    if (hasSizeKeyword && hasCreatureType) {
+      return true;
+    }
+    
+    // Check if this line is a known monster name
+    if (knownMonsterNames.has(lineLower)) {
+      return true;
+    }
+    
+    // Check if this line is ALL CAPS or looks like a title (possible monster name)
+    // and the NEXT line is a size + type line
+    if (idx < processedLines.length - 1) {
+      const nextLine = processedLines[idx + 1].text;
+      const nextLineLower = nextLine.toLowerCase();
+      const nextHasSize = sizeKeywords.some(kw => 
+        nextLine.startsWith(kw) || nextLineLower.includes(` ${kw.toLowerCase()} `)
       );
-      if (isKnownDeity) {
-        console.log('✅✅✅✅✅ ACCEPTED TOP-OF-PAGE KNOWN DEITY!', lineTrimmed.substring(0, 150));
+      const nextHasCreatureType = creatureTypes.some(ct => nextLineLower.includes(ct));
+      
+      if (nextHasSize && nextHasCreatureType) {
+        // If next line is size+type, this line is likely the monster name
         return true;
       }
     }
     
-    // 2. ACCEPT if it STARTS WITH SIZE KEYWORD and has DEITY/MONSTER TYPE
-    const sizeKeywords = ['Small', 'Medium', 'Large', 'Huge', 'Gargantuan', 'Tiny'];
-    const startsWithSize = sizeKeywords.some(kw => lineTrimmed.startsWith(kw));
-    const hasDeityType = ['deity', 'god', 'goddess', 'avatar', 'demi-god', 'titan', 'dragon', 'demon', 'devil'].some(kw => lineLower.includes(kw));
-    
-    if (startsWithSize && hasDeityType) {
-      console.log('✅✅✅ ACCEPTED SIZE + DEITY TYPE!', lineTrimmed.substring(0, 150));
+    return false;
+  };
+  
+  // Check if we should end the current monster
+  const shouldEndMonster = (idx, processedLines, currentBuffer) => {
+    if (idx >= processedLines.length - 1) {
       return true;
     }
     
-    // 3. ACCEPT if it's EXACTLY a KNOWN DEITY NAME (anywhere in page)
-    const isExactKnownDeity = knownDeityNames.some(name => 
-      lineTrimmed.toLowerCase() === name.toLowerCase()
-    );
-    if (isExactKnownDeity) {
-      console.log('✅✅✅ ACCEPTED EXACT KNOWN DEITY!', lineTrimmed.substring(0, 150));
+    const line = processedLines[idx].text;
+    const lineUpper = line.toUpperCase();
+    
+    // Check for stop keywords
+    if (stopKeywords.some(kw => lineUpper.includes(kw))) {
+      return true;
+    }
+    
+    // Check if next line is a new monster start
+    if (isMonsterStart(processedLines[idx + 1].text, idx + 1, processedLines)) {
+      return true;
+    }
+    
+    // Safety check: buffer is way too long
+    if (currentBuffer.length > 500) {
       return true;
     }
     
@@ -1003,65 +1031,35 @@ function extractMonstersFromPDFText(text) {
   for (let i = 0; i < processedLines.length; i++) {
     const lineObj = processedLines[i];
     const line = lineObj.text;
-    const isTopOfPage = lineObj.isTopOfPage;
-    
-    // Extract text-only lines for nextLines
-    const nextLines = processedLines.slice(i + 1, Math.min(i + 20, processedLines.length)).map(l => l.text);
     
     if (!foundPotentialStart) {
-      if (isLikelyMonsterStart(line, nextLines, knownMonsterNames, isTopOfPage)) {
+      if (isMonsterStart(line, i, processedLines)) {
         console.log(`Found potential monster start at line ${i}:`, line.substring(0, 100));
         foundPotentialStart = true;
-        foundAbilityScores = false;
-        foundChallenge = false;
+        foundMonsterNameLine = false;
+        foundSizeTypeLine = false;
         buffer = [line];
       }
     } else {
       buffer.push(line);
       
-      // Track if we've seen ability scores or challenge yet
-      if (!foundAbilityScores && /\b(?:STR|DEX|CON|INT|WIS|CHA)\b/i.test(line)) {
-        foundAbilityScores = true;
-        console.log('Found ability scores in this monster');
-      }
-      if (!foundChallenge && /\b(?:challenge|cr)\s*:?\s*(?:\d+\/\d+|\d+)/i.test(line)) {
-        foundChallenge = true;
-        console.log('Found challenge rating in this monster');
-      }
-      
-      // Check if we should end the monster
-      const lineUpper = line.toUpperCase();
-      const nextLineObj = i < processedLines.length - 1 ? processedLines[i + 1] : null;
-      const nextLine = nextLineObj ? nextLineObj.text : '';
-      const nextLineLower = nextLine.toLowerCase();
-      
-      const shouldEnd = 
-        stopKeywords.some(kw => lineUpper.includes(kw)) ||
-        buffer.length > 1000;
-      
-      if (shouldEnd) {
+      if (shouldEndMonster(i, processedLines, buffer)) {
         console.log(`Ending monster at line ${i}, buffer length: ${buffer.length}`);
         
         const monsterText = buffer.join('\n');
         const parsed = parseStatBlock(monsterText);
         
-        // FINAL CHECK: Accept anything we captured!
-        let isAcceptable = true;
-        
-        if (isAcceptable) {
+        // Only add if we have at least a name or a size+type
+        if (parsed.name || (parsed.ac && parsed.hp)) {
           extractedMonsters.push({
             rawText: monsterText,
             parsed: parsed
           });
-          console.log('✅✅✅ Added REAL monster:', parsed.name || 'Unknown');
-        } else {
-          console.log('❌❌❌ REJECTED - not a real monster:', parsed);
+          console.log('✅✅✅ Added monster:', parsed.name || 'Unknown');
         }
         
         buffer = [];
         foundPotentialStart = false;
-        foundAbilityScores = false;
-        foundChallenge = false;
       }
     }
   }
@@ -1071,10 +1069,7 @@ function extractMonstersFromPDFText(text) {
     const monsterText = buffer.join('\n');
     const parsed = parseStatBlock(monsterText);
     
-    // FINAL CHECK: Accept anything we captured!
-    let isAcceptable = true;
-    
-    if (isAcceptable) {
+    if (parsed.name || (parsed.ac && parsed.hp)) {
       extractedMonsters.push({
         rawText: monsterText,
         parsed: parsed
@@ -1084,19 +1079,39 @@ function extractMonstersFromPDFText(text) {
   
   console.log(`extractMonstersFromPDFText: Found ${extractedMonsters.length} monsters total`);
   
-  // NO DEDUPLICATION - SHOW EVERYTHING!
-  const uniqueMonsters = extractedMonsters;
+  // Deduplicate by name, keeping the first one
+  const seenNames = new Set();
+  const uniqueMonsters = [];
+  for (const monster of extractedMonsters) {
+    const name = monster.parsed?.name || '';
+    if (name && !seenNames.has(name.toLowerCase())) {
+      seenNames.add(name.toLowerCase());
+      uniqueMonsters.push(monster);
+    }
+  }
   
+  console.log(`extractMonstersFromPDFText: Unique monsters: ${uniqueMonsters.length}`);
   return uniqueMonsters;
 }
 
 function saveExtractedMonstersToGlobal(monsters) {
   try {
-    // SAVE EVERYTHING - NO DUPLICATE CHECKING!
     const existing = JSON.parse(localStorage.getItem('dnd_extension_extracted_monsters') || '[]');
-    const all = [...existing, ...monsters];
+    
+    // Deduplicate: keep only new monsters not already in existing
+    const seenNames = new Set(existing.map(m => m.parsed?.name?.toLowerCase() || ''));
+    const newMonsters = monsters.filter(m => {
+      const name = m.parsed?.name?.toLowerCase() || '';
+      if (name && !seenNames.has(name)) {
+        seenNames.add(name);
+        return true;
+      }
+      return false;
+    });
+    
+    const all = [...existing, ...newMonsters];
     localStorage.setItem('dnd_extension_extracted_monsters', JSON.stringify(all));
-    return monsters.length;
+    return newMonsters.length;
   } catch (e) {
     console.error('Failed to save extracted monsters:', e);
     return 0;
@@ -1108,6 +1123,165 @@ function getExtractedMonstersFromGlobal() {
     return JSON.parse(localStorage.getItem('dnd_extension_extracted_monsters') || '[]');
   } catch (e) {
     return [];
+  }
+}
+
+// AI Extraction with mlvoca.com (free, no API key)
+async function extractWithAI(text) {
+  const systemPrompt = `You are a D&D 5e stat block and item extractor. Extract all monsters and magic items from the provided text. 
+For each monster, extract: name, hp, ac, cr, type, and the full stat block text.
+For each magic item, extract: name, type, rarity, and the full item description text.
+Return a JSON object with two arrays: "monsters" and "items". Each entry should have the keys:
+- For monsters: { "name": "...", "hp": "...", "ac": "...", "cr": "...", "type": "...", "rawText": "..." }
+- For items: { "name": "...", "type": "...", "rarity": "...", "rawText": "..." }
+Do not include any other text besides the JSON.`;
+
+  const userPrompt = `${systemPrompt}\n\nExtract monsters and items from this text:\n\n${text.substring(0, 30000)}`; // Limit to avoid token issues
+
+  try {
+    const response = await fetch('https://mlvoca.com/api/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'deepseek-r1:1.5b',
+        prompt: userPrompt,
+        stream: false,
+        format: 'json'
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`mlvoca API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    let content = data.response.trim();
+    
+    // Extract JSON from response (in case there are extra characters)
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('Could not parse JSON from AI response');
+    }
+
+    return JSON.parse(jsonMatch[0]);
+  } catch (error) {
+    console.error('AI extraction failed:', error);
+    throw error;
+  }
+}
+
+// Basic item extraction (without AI)
+function extractItemsFromPDFText(text) {
+  const extractedItems = [];
+  
+  const rarityKeywords = ['common', 'uncommon', 'rare', 'very rare', 'legendary', 'artifact'];
+  const itemTypeKeywords = ['weapon', 'armor', 'wondrous item', 'potion', 'scroll', 'ring', 'wand', 'staff', 'rod'];
+  
+  const processedLines = text.split(/\n+/).map(line => line.trim()).filter(line => line.length > 0);
+  
+  let buffer = [];
+  let foundItemStart = false;
+  
+  for (let i = 0; i < processedLines.length; i++) {
+    const line = processedLines[i];
+    const lineLower = line.toLowerCase();
+    
+    if (!foundItemStart) {
+      // Check if line is likely an item start (has rarity and item type)
+      const hasRarity = rarityKeywords.some(r => lineLower.includes(r));
+      const hasItemType = itemTypeKeywords.some(t => lineLower.includes(t));
+      
+      if (hasRarity && hasItemType) {
+        foundItemStart = true;
+        buffer = [line];
+      }
+    } else {
+      buffer.push(line);
+      
+      // Check if we should end the item (when we hit another potential item or monster)
+      const lineUpper = line.toUpperCase();
+      const nextLine = i < processedLines.length - 1 ? processedLines[i + 1] : '';
+      const nextLineLower = nextLine.toLowerCase();
+      
+      const shouldEnd = 
+        buffer.length > 200 ||
+        (nextLine && rarityKeywords.some(r => nextLineLower.includes(r)) && itemTypeKeywords.some(t => nextLineLower.includes(t)));
+      
+      if (shouldEnd) {
+        const itemText = buffer.join('\n');
+        
+        // Parse basic item info
+        let name = '';
+        let type = '';
+        let rarity = '';
+        
+        // Try to find name (first line)
+        if (buffer.length > 0) {
+          const firstLine = buffer[0];
+          const rarityMatch = firstLine.match(new RegExp(`\\b(${rarityKeywords.join('|')})\\b`, 'i'));
+          const typeMatch = firstLine.match(new RegExp(`\\b(${itemTypeKeywords.join('|')})\\b`, 'i'));
+          
+          if (rarityMatch) rarity = rarityMatch[1];
+          if (typeMatch) type = typeMatch[1];
+          
+          // Name is everything before rarity/type
+          name = firstLine.split(/(?:common|uncommon|rare|very rare|legendary|artifact|weapon|armor|wondrous item|potion|scroll|ring|wand|staff|rod)/i)[0].trim();
+        }
+        
+        extractedItems.push({
+          rawText: itemText,
+          parsed: {
+            name: name || 'Unknown Item',
+            type: type || 'Wondrous Item',
+            rarity: rarity || 'Common',
+            description: itemText
+          }
+        });
+        
+        foundItemStart = false;
+        buffer = [];
+      }
+    }
+  }
+  
+  // Deduplicate by name, keeping the first one
+  const seenNames = new Set();
+  const uniqueItems = [];
+  for (const item of extractedItems) {
+    const name = item.parsed?.name || '';
+    if (name && !seenNames.has(name.toLowerCase())) {
+      seenNames.add(name.toLowerCase());
+      uniqueItems.push(item);
+    }
+  }
+  
+  console.log(`extractItemsFromPDFText: Found ${extractedItems.length} total, unique: ${uniqueItems.length}`);
+  return uniqueItems;
+}
+
+function saveExtractedItemsToGlobal(items) {
+  try {
+    const existing = JSON.parse(localStorage.getItem('dnd_extension_extracted_items') || '[]');
+    
+    // Deduplicate: keep only new items not already in existing
+    const seenNames = new Set(existing.map(i => i.parsed?.name?.toLowerCase() || ''));
+    const newItems = items.filter(i => {
+      const name = i.parsed?.name?.toLowerCase() || '';
+      if (name && !seenNames.has(name)) {
+        seenNames.add(name);
+        return true;
+      }
+      return false;
+    });
+    
+    const all = [...existing, ...newItems];
+    localStorage.setItem('dnd_extension_extracted_items', JSON.stringify(all));
+    return newItems.length;
+  } catch (e) {
+    console.error('Failed to save extracted items:', e);
+    return 0;
   }
 }
 
@@ -1537,17 +1711,42 @@ export async function addMonsterToScene(monster) {
   // Use getStoredImage for case-insensitive lookup
   let imageUrl = getStoredImage('monster', monster.name) || monster.image;
   
+  // Upgrade HTTP to HTTPS to avoid mixed content warnings
+  if (imageUrl && typeof imageUrl === 'string' && imageUrl.startsWith('http://')) {
+      imageUrl = 'https://' + imageUrl.substring('http://'.length);
+  }
+  
   // Robust validation: If it's not a string or looks like JSON, discard it
   if (imageUrl && (typeof imageUrl !== 'string' || imageUrl.trim().startsWith('{') || imageUrl.trim().startsWith('%7B'))) {
       console.warn("Invalid/Corrupt monster image URL detected. Resetting to default.");
       imageUrl = null;
   }
   
-  // Helper to check if image exists
-  const checkImage = (url) => new Promise(resolve => {
+  // Helper to check if image exists with a timeout to avoid hanging
+  const checkImage = (url, timeout = 500) => new Promise(resolve => {
       const img = new Image();
-      img.onload = () => resolve(true);
-      img.onerror = () => resolve(false);
+      let resolved = false;
+      const timer = setTimeout(() => {
+          if (!resolved) {
+              resolved = true;
+              resolve(false);
+          }
+      }, timeout);
+      
+      img.onload = () => {
+          if (!resolved) {
+              resolved = true;
+              clearTimeout(timer);
+              resolve(true);
+          }
+      };
+      img.onerror = () => {
+          if (!resolved) {
+              resolved = true;
+              clearTimeout(timer);
+              resolve(false);
+          }
+      };
       img.src = url;
   });
 
@@ -1560,83 +1759,15 @@ export async function addMonsterToScene(monster) {
           } catch (e) {}
       }
       
-      const exists = await checkImage(imageUrl);
+      const exists = await checkImage(imageUrl, 500);
       if (!exists) {
-          console.warn(`Image URL failed to load: ${imageUrl}. Trying alternatives...`);
-          
-          // Try case-insensitive fix for Monster_Manual
-          if (imageUrl.includes('Monster_Manual')) {
-              const altUrl = imageUrl.replace('Monster_Manual', 'monster_manual');
-              if (await checkImage(altUrl)) {
-                  console.log(`Found image at alternative path: ${altUrl}`);
-                  imageUrl = altUrl;
-              } else {
-                  imageUrl = null; // Trigger full fallback
-              }
-          } else {
-              imageUrl = null; // Trigger full fallback
-          }
+          console.warn(`Image URL failed to load: ${imageUrl}. Using placeholder.`);
+          imageUrl = null; // Skip all the fallback checks, go straight to placeholder
       }
   }
 
-  // Attempt to find a locally scraped/generated image if none is set
+  // If no image found, use placeholder immediately
   if (!imageUrl) {
-      const safeName = monster.name.replace(/[^a-zA-Z0-9]/g, '_');
-      
-      // Determine potential source folders to check
-      let possiblePaths = [];
-      
-      // 1. Check specific source folder if known
-      if (monster.source) {
-          // Normalize source to lowercase to match scraper behavior
-          const safeSource = monster.source.toLowerCase().replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
-          possiblePaths.push(`images/monsters/${safeSource}/${safeName}.png`);
-      }
-      
-      // 2. Check "Other" folder (fallback for scraped images)
-      possiblePaths.push(`images/monsters/Other/${safeName}.png`);
-      
-      // 3. Check legacy flat folder (backward compatibility)
-      possiblePaths.push(`images/monsters/${safeName}.png`);
-      
-      // 4. Check common D&D sources (fallback for mismatched sources)
-      // This helps when monsters.json says "Flee Mortals" but we scraped it into "Monster_Manual"
-      const commonSources = [
-          "Monster_Manual", 
-          "Volos_Guide_to_Monsters", 
-          "Mordenkainens_Tome_of_Foes", 
-          "Fizbans_Treasury_of_Dragons",
-          "Mordenkainen_Presents_Monsters_of_the_Multiverse"
-      ];
-      for (const src of commonSources) {
-          possiblePaths.push(`images/monsters/${src}/${safeName}.png`);
-      }
-
-      for (const path of possiblePaths) {
-           const exists = await new Promise(resolve => {
-               const img = new Image();
-               img.onload = () => resolve(true);
-               img.onerror = () => resolve(false);
-               img.src = path;
-           });
-           
-           if (exists) {
-               imageUrl = path;
-               break; // Found one!
-           }
-      }
-  }
-
-  // Resolve relative paths (e.g. from extracted images)
-  if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-      try {
-          imageUrl = new URL(imageUrl, window.location.href).href;
-      } catch (e) {
-          console.warn("Failed to resolve relative image URL:", imageUrl, e);
-      }
-  }
-
-  if (!imageUrl || imageUrl.includes('apple-touch-icon') || imageUrl.includes('unsplash')) {
       imageUrl = getPlaceholderImage(monster.name, 'monster');
   }
   
@@ -2502,6 +2633,26 @@ function deleteItem(name) {
     }
 }
 
+function deleteItemPermanently(name, type) {
+    // Delete from custom lists if present
+    if (type === 'monster') {
+        const customMonsters = getCustomMonsters().filter(m => m.name !== name);
+        localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customMonsters));
+    } else if (type === 'item') {
+        const customItems = getCustomItems().filter(i => i.name !== name);
+        localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customItems));
+    } else if (type === 'spell') {
+        const customSpells = getCustomSpells().filter(s => s.name !== name);
+        localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customSpells));
+    }
+    
+    // Remove from deleted items to restore built-in if applicable
+    const deletedList = getDeletedItems().filter(n => n !== name);
+    localStorage.setItem('dnd_extension_deleted_items', JSON.stringify(deletedList));
+    
+    saveToBackend();
+}
+
 export function searchItems(query) {
   const deleted = getDeletedItems();
   const customs = getCustomItems();
@@ -2738,6 +2889,8 @@ export function searchItems(query) {
             </div>
             <div id="pdf-upload-status" style="margin-top: 8px; font-size: 0.8em; color: #666;"></div>
             <div id="pdf-extracted-monsters" style="margin-top: 10px; display: none; text-align: left; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 4px; padding: 8px;">
+            </div>
+            <div id="pdf-extracted-items" style="margin-top: 10px; display: none; text-align: left; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 4px; padding: 8px;">
             </div>
         </div>` : ''}
 
@@ -3630,6 +3783,7 @@ export function searchItems(query) {
   const pdfUploadInput = document.getElementById('pdf-upload-input');
   const pdfUploadStatus = document.getElementById('pdf-upload-status');
   const pdfExtractedMonsters = document.getElementById('pdf-extracted-monsters');
+  const pdfExtractedItems = document.getElementById('pdf-extracted-items');
   const pdfUploadSection = document.getElementById('pdf-upload-section');
 
   if (pdfUploadBtn && pdfUploadInput) {
@@ -3642,17 +3796,54 @@ export function searchItems(query) {
       pdfUploadStatus.style.color = '#333';
       pdfUploadStatus.textContent = `Processing: ${file.name}...`;
       pdfExtractedMonsters.style.display = 'none';
+      pdfExtractedItems.style.display = 'none';
       
       try {
         const text = await extractTextFromPDF(file);
-        pdfUploadStatus.textContent = 'Extracting monsters...';
         
-        const extractedMonsters = extractMonstersFromPDFText(text);
+        let extractedMonsters = [];
+        let extractedItems = [];
         
-        if (extractedMonsters.length === 0) {
+        // Always use AI extraction first, fall back to basic if AI fails
+        try {
+          pdfUploadStatus.textContent = 'Extracting with AI...';
+          const aiResult = await extractWithAI(text);
+          extractedMonsters = aiResult.monsters || [];
+          extractedItems = aiResult.items || [];
+          
+          // Format monsters to match existing structure
+          extractedMonsters = extractedMonsters.map(m => ({
+            rawText: m.rawText,
+            parsed: {
+              name: m.name,
+              hp: m.hp,
+              ac: m.ac,
+              cr: m.cr,
+              type: m.type
+            }
+          }));
+          
+          // Format items to match existing structure
+          extractedItems = extractedItems.map(i => ({
+            rawText: i.rawText,
+            parsed: {
+              name: i.name,
+              type: i.type,
+              rarity: i.rarity,
+              description: i.rawText
+            }
+          }));
+        } catch (aiError) {
+          console.warn('AI extraction failed, using basic extraction:', aiError);
+          pdfUploadStatus.textContent = 'AI extraction failed, using basic extraction...';
+          extractedMonsters = extractMonstersFromPDFText(text);
+          extractedItems = extractItemsFromPDFText(text);
+        }
+        
+        if (extractedMonsters.length === 0 && extractedItems.length === 0) {
           pdfUploadStatus.style.color = '#ff6b6b';
           pdfUploadStatus.innerHTML = `
-            No monsters found in PDF.<br>
+            No monsters or items found in PDF.<br>
             <span style="font-size: 0.8em; color: #888;">
               Extracted ${text.length} characters. 
               <button id="show-extracted-text-btn" style="background: none; border: none; color: #4a90d9; cursor: pointer; text-decoration: underline;">Show sample text</button>
@@ -3663,11 +3854,10 @@ export function searchItems(query) {
             const showBtn = document.getElementById('show-extracted-text-btn');
             if (showBtn) {
               showBtn.addEventListener('click', () => {
-                // Filter out our markers for clean display
                 let cleanText = text;
                 cleanText = cleanText.replace(/---TOP_OF_PAGE---/g, '');
                 cleanText = cleanText.replace(/---PAGE_BREAK---/g, '');
-                cleanText = cleanText.replace(/\n\s*\n\s*\n/g, '\n\n'); // Remove extra newlines
+                cleanText = cleanText.replace(/\n\s*\n\s*\n/g, '\n\n');
                 const sample = cleanText.trim().substring(0, 2000);
                 alert('Extracted text sample (first 2000 chars):\n\n' + sample);
               });
@@ -3677,42 +3867,77 @@ export function searchItems(query) {
           return;
         }
         
-        const savedCount = saveExtractedMonstersToGlobal(extractedMonsters);
+        const savedMonsterCount = saveExtractedMonstersToGlobal(extractedMonsters);
+        const savedItemCount = saveExtractedItemsToGlobal(extractedItems);
+        
         pdfUploadStatus.style.color = '#4CAF50';
-        pdfUploadStatus.innerHTML = `Success! Found ${extractedMonsters.length} monster(s), saved ${savedCount} new one(s) to global storage.<br>
+        pdfUploadStatus.innerHTML = `Success! Found ${extractedMonsters.length} monster(s) and ${extractedItems.length} item(s). Saved ${savedMonsterCount} monster(s) and ${savedItemCount} item(s) to global storage.<br>
           <span style="font-size: 0.8em; color: #888;">
             <button id="show-full-extracted-btn" style="background: none; border: none; color: #4a90d9; cursor: pointer; text-decoration: underline; margin-top: 5px;">Show Full Extracted Text</button>
           </span>`;
         
-        pdfExtractedMonsters.style.display = 'block';
-        pdfExtractedMonsters.innerHTML = extractedMonsters.map((m, idx) => {
-          const name = m.parsed?.name || `Monster ${idx + 1}`;
-          const stats = [];
-          if (m.parsed?.ac) stats.push(`AC: ${m.parsed.ac}`);
-          if (m.parsed?.hp) stats.push(`HP: ${m.parsed.hp}`);
-          if (m.parsed?.cr) stats.push(`CR: ${m.parsed.cr}`);
+        // Show extracted monsters
+        if (extractedMonsters.length > 0) {
+          pdfExtractedMonsters.style.display = 'block';
+          pdfExtractedMonsters.innerHTML = `<div style="font-weight: bold; margin-bottom: 8px; color: #333;">Extracted Monsters:</div>` + extractedMonsters.map((m, idx) => {
+            const name = m.parsed?.name || `Monster ${idx + 1}`;
+            const stats = [];
+            if (m.parsed?.ac) stats.push(`AC: ${m.parsed.ac}`);
+            if (m.parsed?.hp) stats.push(`HP: ${m.parsed.hp}`);
+            if (m.parsed?.cr) stats.push(`CR: ${m.parsed.cr}`);
+            
+            return `
+              <div style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer;" class="extracted-monster-item" data-index="${idx}">
+                <div style="font-weight: bold; color: #333;">${name}</div>
+                <div style="font-size: 0.8em; color: #666;">${stats.join(' | ')}</div>
+              </div>
+            `;
+          }).join('');
           
-          return `
-            <div style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer;" class="extracted-monster-item" data-index="${idx}">
-              <div style="font-weight: bold; color: #333;">${name}</div>
-              <div style="font-size: 0.8em; color: #666;">${stats.join(' | ')}</div>
-            </div>
-          `;
-        }).join('');
-        
-        pdfExtractedMonsters.querySelectorAll('.extracted-monster-item').forEach((item, idx) => {
-          item.addEventListener('click', () => {
-            const monster = extractedMonsters[idx];
-            openEditor('monster', {
-              name: monster.parsed?.name || '',
-              hp: monster.parsed?.hp || '',
-              ac: monster.parsed?.ac || '',
-              cr: monster.parsed?.cr || '',
-              type: monster.parsed?.type || '',
-              description: monster.rawText || ''
+          pdfExtractedMonsters.querySelectorAll('.extracted-monster-item').forEach((item, idx) => {
+            item.addEventListener('click', () => {
+              const monster = extractedMonsters[idx];
+              openEditor('monster', {
+                name: monster.parsed?.name || '',
+                hp: monster.parsed?.hp || '',
+                ac: monster.parsed?.ac || '',
+                cr: monster.parsed?.cr || '',
+                type: monster.parsed?.type || '',
+                description: monster.rawText || ''
+              });
             });
           });
-        });
+        }
+        
+        // Show extracted items
+        if (extractedItems.length > 0) {
+          pdfExtractedItems.style.display = 'block';
+          pdfExtractedItems.innerHTML = `<div style="font-weight: bold; margin-bottom: 8px; color: #333;">Extracted Items:</div>` + extractedItems.map((i, idx) => {
+            const name = i.parsed?.name || `Item ${idx + 1}`;
+            const details = [];
+            if (i.parsed?.type) details.push(i.parsed.type);
+            if (i.parsed?.rarity) details.push(i.parsed.rarity);
+            
+            return `
+              <div style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer;" class="extracted-item-item" data-index="${idx}">
+                <div style="font-weight: bold; color: #333;">${name}</div>
+                <div style="font-size: 0.8em; color: #666;">${details.join(' | ')}</div>
+              </div>
+            `;
+          }).join('');
+          
+          pdfExtractedItems.querySelectorAll('.extracted-item-item').forEach((item, idx) => {
+            item.addEventListener('click', () => {
+              const itemData = extractedItems[idx];
+              openEditor('item', {
+                name: itemData.parsed?.name || '',
+                type: itemData.parsed?.type || '',
+                rarity: itemData.parsed?.rarity || '',
+                description: itemData.rawText || ''
+              });
+            });
+          });
+        }
         
         setTimeout(() => {
           const showFullBtn = document.getElementById('show-full-extracted-btn');
@@ -3723,11 +3948,10 @@ export function searchItems(query) {
             showFullBtn.addEventListener('click', () => {
               if (!textAreaVisible) {
                 textAreaElement = document.createElement('textarea');
-                // Filter out our markers for clean display
                 let cleanText = text;
                 cleanText = cleanText.replace(/---TOP_OF_PAGE---/g, '');
                 cleanText = cleanText.replace(/---PAGE_BREAK---/g, '');
-                cleanText = cleanText.replace(/\n\s*\n\s*\n/g, '\n\n'); // Remove extra newlines
+                cleanText = cleanText.replace(/\n\s*\n\s*\n/g, '\n\n');
                 textAreaElement.value = cleanText.trim();
                 textAreaElement.style.width = '100%';
                 textAreaElement.style.height = '400px';
@@ -4433,10 +4657,12 @@ export function searchItems(query) {
                  <button id="update-stats-btn" data-id="${itemId}" style="margin-top: 5px; padding: 6px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Apply Changes</button>
                  <button id="share-description-btn" style="width: 100%; margin-top: 5px; background-color: #FF9800; color: white; border: none; padding: 6px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
                  <button id="add-to-scene-btn" style="width: 100%; margin-top: 5px; background-color: #4CAF50; color: white; border: none; padding: 6px; border-radius: 4px; cursor: pointer;">Add Another to Scene</button>
+                 <button id="delete-item-btn" style="width: 100%; margin-top: 5px; background-color: #d32f2f; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Delete from List</button>
                </div>`
             : `<button id="edit-btn" style="width: 100%; margin-bottom: 5px; background-color: #2196F3; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Edit / Rename</button>
                <button id="add-to-scene-btn" style="width: 100%; margin-bottom: 5px; background-color: #4CAF50; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Add to Scene</button>
                <button id="share-description-btn" style="width: 100%; margin-bottom: 5px; background-color: #FF9800; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
+               <button id="delete-item-btn" style="width: 100%; margin-bottom: 10px; background-color: #d32f2f; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Delete from List</button>
                <div style="margin-top: 5px;"><strong>HP:</strong> ${data.hp} | <strong>AC:</strong> ${data.ac}</div>`;
     }
 
@@ -4596,8 +4822,18 @@ export function searchItems(query) {
           <hr>
           ${flavorHtml}
           <hr>
-          <h3 style="margin-bottom: 5px;">Details</h3>
-          ${detailsHtml}
+          <h3 style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
+            Details
+            <button id="edit-description-btn" style="padding: 4px 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em;">Edit</button>
+          </h3>
+          <div id="details-display">${detailsHtml}</div>
+          <div id="details-edit" style="display: none; margin-top: 10px;">
+            <textarea id="description-textarea" rows="8" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">${descriptionToUse || ''}</textarea>
+            <div style="margin-top: 8px; display: flex; gap: 8px;">
+              <button id="save-description-btn" style="flex: 1; padding: 6px 12px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">Save</button>
+              <button id="cancel-description-btn" style="flex: 1; padding: 6px 12px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
+          </div>
           <p style="margin-top: 10px; font-size: 0.8em; color: #666;"><em>${data.source || 'Unknown Source'}</em></p>
         `;
     } else {
@@ -4619,10 +4855,139 @@ export function searchItems(query) {
             </button>
           </div>
           <hr>
-          <div style="white-space: pre-wrap; font-family: monospace; background: #333; padding: 10px; border-radius: 5px;">
+          <h3 style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
+            Description
+            <button id="edit-description-btn" style="padding: 4px 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em;">Edit</button>
+          </h3>
+          <div id="details-display" style="white-space: pre-wrap; font-family: monospace; background: #333; padding: 10px; border-radius: 5px;">
             ${descriptionToUse || 'No detailed stats available.'}
           </div>
+          <div id="details-edit" style="display: none; margin-top: 10px;">
+            <textarea id="description-textarea" rows="12" style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; box-sizing: border-box; background: #2a2a2a; color: white;">${descriptionToUse || ''}</textarea>
+            <div style="margin-top: 8px; display: flex; gap: 8px;">
+              <button id="save-description-btn" style="flex: 1; padding: 6px 12px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">Save</button>
+              <button id="cancel-description-btn" style="flex: 1; padding: 6px 12px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+            </div>
+          </div>
         `;
+    }
+
+    // Description Edit Listeners
+    const editDescBtn = document.getElementById('edit-description-btn');
+    const detailsDisplay = document.getElementById('details-display');
+    const detailsEdit = document.getElementById('details-edit');
+    const descTextarea = document.getElementById('description-textarea');
+    const saveDescBtn = document.getElementById('save-description-btn');
+    const cancelDescBtn = document.getElementById('cancel-description-btn');
+    
+    if (editDescBtn) {
+      editDescBtn.addEventListener('click', () => {
+        detailsDisplay.style.display = 'none';
+        detailsEdit.style.display = 'block';
+        if (descTextarea) {
+          descTextarea.focus();
+        }
+      });
+    }
+    
+    if (cancelDescBtn) {
+      cancelDescBtn.addEventListener('click', () => {
+        detailsEdit.style.display = 'none';
+        detailsDisplay.style.display = 'block';
+        if (descTextarea) {
+          descTextarea.value = descriptionToUse || '';
+        }
+      });
+    }
+    
+    if (saveDescBtn) {
+      saveDescBtn.addEventListener('click', async () => {
+        if (!descTextarea) return;
+        
+        const newDesc = descTextarea.value;
+        
+        // Save to custom data
+        let saved = false;
+        
+        if (isMonster) {
+          const customMonsters = getCustomMonsters();
+          let idx = customMonsters.findIndex(m => m.name === data.name);
+          
+          if (idx === -1) {
+            // Create custom monster if not exists
+            customMonsters.push({
+              ...data,
+              description: newDesc,
+              source: 'Custom'
+            });
+            saved = true;
+          } else {
+            customMonsters[idx].description = newDesc;
+            saved = true;
+          }
+          
+          if (saved) {
+            localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customMonsters));
+            saveToBackend();
+          }
+        } else if (isItem) {
+          const customItems = getCustomItems();
+          let idx = customItems.findIndex(i => i.name === data.name);
+          
+          if (idx === -1) {
+            customItems.push({
+              ...data,
+              description: newDesc,
+              source: 'Custom'
+            });
+            saved = true;
+          } else {
+            customItems[idx].description = newDesc;
+            saved = true;
+          }
+          
+          if (saved) {
+            localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customItems));
+            saveToBackend();
+          }
+        } else if (isSpell) {
+          const customSpells = getCustomSpells();
+          let idx = customSpells.findIndex(s => s.name === data.name);
+          
+          if (idx === -1) {
+            customSpells.push({
+              ...data,
+              description: newDesc,
+              source: 'Custom'
+            });
+            saved = true;
+          } else {
+            customSpells[idx].description = newDesc;
+            saved = true;
+          }
+          
+          if (saved) {
+            localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customSpells));
+            saveToBackend();
+          }
+        }
+        
+        if (saved) {
+          descriptionToUse = newDesc;
+          
+          // Re-render the display
+          if (isItem || isSpell) {
+            detailsHtml = `<div style="white-space: pre-wrap; font-family: sans-serif;">${newDesc || 'No details.'}</div>`;
+            detailsDisplay.innerHTML = detailsHtml;
+          } else {
+            detailsDisplay.innerHTML = `<div style="white-space: pre-wrap; font-family: monospace; background: #333; padding: 10px; border-radius: 5px;">${newDesc || 'No detailed stats available.'}</div>`;
+          }
+          
+          detailsEdit.style.display = 'none';
+          detailsDisplay.style.display = 'block';
+          alert('Description saved!');
+        }
+      });
     }
 
     // Refresh Stats Listener (for Monsters)
@@ -4848,20 +5213,101 @@ export function searchItems(query) {
     const addToSceneBtn = document.getElementById('add-to-scene-btn');
     if (addToSceneBtn) {
         addToSceneBtn.addEventListener('click', async () => {
-             addToSceneBtn.disabled = true;
-             addToSceneBtn.innerText = "Adding...";
-             try {
-                 await addMonsterToScene(data);
-                 addToSceneBtn.innerText = "Added!";
-             } catch (e) {
-                 console.error(e);
-                 alert("Error adding to scene: " + e.message);
-                 addToSceneBtn.innerText = "Error";
-             }
-             setTimeout(() => {
-                 addToSceneBtn.disabled = false;
-                 addToSceneBtn.innerText = itemId ? "Add Another to Scene" : "Add to Scene";
-             }, 2000);
+            // Create a modal dialog for preview/edit
+            const modalHtml = `
+                <div id="place-preview-modal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 999999; color: #fff;">
+                    <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto;">
+                        <h3 style="margin-top: 0; color: #4a90d9;">Place ${data.name}</h3>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 0.9em;">Name:</label>
+                            <input type="text" id="preview-name" value="${data.name}" style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: white;">
+                        </div>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 5px; font-size: 0.9em;">HP:</label>
+                                <input type="number" id="preview-hp" value="${data.hp}" style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: white;">
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 5px; font-size: 0.9em;">AC:</label>
+                                <input type="number" id="preview-ac" value="${data.ac}" style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: white;">
+                            </div>
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 0.9em;">CR:</label>
+                            <input type="text" id="preview-cr" value="${data.cr || ''}" style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: white;">
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 5px; font-size: 0.9em;">Description:</label>
+                            <textarea id="preview-description" rows="6" style="width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: white; resize: vertical;">${data.description || ''}</textarea>
+                        </div>
+                        
+                        <div style="display: flex; gap: 10px; margin-top: 20px;">
+                            <button id="place-cancel-btn" style="flex: 1; padding: 10px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+                            <button id="place-confirm-btn" style="flex: 2; padding: 10px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Place on Map</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add modal to body
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            
+            // Get modal elements
+            const modal = document.getElementById('place-preview-modal');
+            const cancelBtn = document.getElementById('place-cancel-btn');
+            const confirmBtn = document.getElementById('place-confirm-btn');
+            const previewName = document.getElementById('preview-name');
+            const previewHp = document.getElementById('preview-hp');
+            const previewAc = document.getElementById('preview-ac');
+            const previewCr = document.getElementById('preview-cr');
+            const previewDescription = document.getElementById('preview-description');
+            
+            // Cancel button handler
+            cancelBtn.addEventListener('click', () => {
+                modal.remove();
+            });
+            
+            // Confirm button handler
+            confirmBtn.addEventListener('click', async () => {
+                confirmBtn.disabled = true;
+                confirmBtn.innerText = "Placing...";
+                
+                // Create modified monster data
+                const modifiedMonster = {
+                    ...data,
+                    name: previewName.value,
+                    hp: parseInt(previewHp.value) || data.hp,
+                    ac: parseInt(previewAc.value) || data.ac,
+                    cr: previewCr.value,
+                    description: previewDescription.value
+                };
+                
+                try {
+                    await addMonsterToScene(modifiedMonster);
+                    confirmBtn.innerText = "Placed!";
+                    setTimeout(() => {
+                        modal.remove();
+                        addToSceneBtn.innerText = itemId ? "Add Another to Scene" : "Add to Scene";
+                        addToSceneBtn.disabled = false;
+                    }, 1000);
+                } catch (e) {
+                    console.error(e);
+                    alert("Error adding to scene: " + e.message);
+                    confirmBtn.innerText = "Error";
+                    confirmBtn.disabled = false;
+                }
+            });
+            
+            // Close modal when clicking outside
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
         });
     }
 
@@ -4894,15 +5340,55 @@ export function searchItems(query) {
         const deleteBtn = document.getElementById('delete-item-btn');
         if (deleteBtn) {
             deleteBtn.addEventListener('click', () => {
-                if (confirm(`Are you sure you want to remove "${data.name}" from the list? This will hide it from search results.`)) {
+                const choice = confirm(`Choose an option for "${data.name}":\n\n- Click OK to PERMANENTLY DELETE (removes custom entry, restores built-in)\n- Click Cancel to just HIDE from search results`);
+                
+                if (choice) {
+                    // Permanently delete
+                    let type;
+                    if (isSpell) type = 'spell';
+                    else if (isItem) type = 'item';
+                    else type = 'monster';
+                    
+                    deleteItemPermanently(data.name, type);
+                    alert(`"${data.name}" has been permanently deleted!`);
+                } else {
+                    // Just hide
                     deleteItem(data.name);
-                    // Go back to search
-                    statsView.style.display = 'none';
-                    searchView.style.display = 'flex';
-                    // Refresh search results
-                    const input = document.getElementById('search-input');
-                    if (input) renderResults(input.value);
+                    alert(`"${data.name}" has been hidden from search results!`);
                 }
+                
+                // Go back to search
+                statsView.style.display = 'none';
+                searchView.style.display = 'flex';
+                // Refresh search results
+                const input = document.getElementById('search-input');
+                if (input) renderResults(input.value);
+            });
+        }
+    }
+
+    if (!isSpell && !isItem) {
+        const deleteBtn = document.getElementById('delete-item-btn');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', () => {
+                const choice = confirm(`Choose an option for "${data.name}":\n\n- Click OK to PERMANENTLY DELETE (removes custom entry, restores built-in)\n- Click Cancel to just HIDE from search results`);
+                
+                if (choice) {
+                    // Permanently delete
+                    deleteItemPermanently(data.name, 'monster');
+                    alert(`"${data.name}" has been permanently deleted!`);
+                } else {
+                    // Just hide
+                    deleteItem(data.name);
+                    alert(`"${data.name}" has been hidden from search results!`);
+                }
+                
+                // Go back to search
+                statsView.style.display = 'none';
+                searchView.style.display = 'flex';
+                // Refresh search results
+                const input = document.getElementById('search-input');
+                if (input) renderResults(input.value);
             });
         }
     }
@@ -4911,13 +5397,24 @@ export function searchItems(query) {
         const deleteBtn = document.getElementById('delete-item-btn');
         if (deleteBtn) {
             deleteBtn.addEventListener('click', () => {
-                if (confirm(`Are you sure you want to remove "${data.name}" from the list? This will hide it from search results.`)) {
+                const choice = confirm(`Choose an option for "${data.name}":\n\n- Click OK to PERMANENTLY DELETE (removes custom entry, restores built-in)\n- Click Cancel to just HIDE from search results`);
+                
+                if (choice) {
+                    // Permanently delete
+                    deleteItemPermanently(data.name, 'spell');
+                    alert(`"${data.name}" has been permanently deleted!`);
+                } else {
+                    // Just hide
                     deleteItem(data.name);
-                    statsView.style.display = 'none';
-                    searchView.style.display = 'flex';
-                    const input = document.getElementById('search-input');
-                    if (input) renderResults(input.value);
+                    alert(`"${data.name}" has been hidden from search results!`);
                 }
+                
+                // Go back to search
+                statsView.style.display = 'none';
+                searchView.style.display = 'flex';
+                // Refresh search results
+                const input = document.getElementById('search-input');
+                if (input) renderResults(input.value);
             });
         }
 
