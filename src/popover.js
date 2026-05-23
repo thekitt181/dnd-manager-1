@@ -14,6 +14,11 @@ let spawnPosition = null; // Global spawn position from URL params
 
 const ICON_SVG = "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/master/svgs/solid/dice-d20.svg";
 
+// OCR.space API Configuration
+const OCR_SPACE_API_KEYS = ['K88315718088957', 'K81029421388957'];
+const OCR_SPACE_API_URL = 'https://api.ocr.space/parse/image';
+let currentApiKeyIndex = 0;
+
 // Helper: Normalize string for fuzzy matching (handles OCR errors)
 function normalizeSpellName(str) {
     return str.toLowerCase()
@@ -774,6 +779,50 @@ function parseStatBlock(text) {
 }
 
 // PDF Extraction Functions
+function processItemsToLines(items, pageHeight) {
+  const linesMap = new Map();
+  for (const item of items) {
+    // Skip items without transform array or required properties!
+    if (!item || !item.transform || item.transform.length < 6) {
+      continue;
+    }
+    
+    const y = Math.round(item.transform[5]);
+    if (!linesMap.has(y)) {
+      linesMap.set(y, []);
+    }
+    linesMap.get(y).push(item);
+  }
+  
+  const sortedYs = Array.from(linesMap.keys()).sort((a, b) => b - a);
+  const lines = [];
+  
+  for (const y of sortedYs) {
+    const relativeY = y / pageHeight;
+    if (relativeY > 0.97 || relativeY < 0.03) {
+      continue;
+    }
+    
+    const itemsInLine = linesMap.get(y);
+    // Sort items, skip any items without transform[4]!
+    itemsInLine.sort((a, b) => {
+      const ax = a?.transform?.[4] ?? 0;
+      const bx = b?.transform?.[4] ?? 0;
+      return ax - bx;
+    });
+    const lineText = itemsInLine.map(i => i?.str ?? '').join('').trim();
+    
+    const isPageNumber = /^\s*\d+\s*$/.test(lineText);
+    const isFooter = /^page\s+\d+$/i.test(lineText) || /^chapter\s+\d+$/i.test(lineText);
+    
+    if (lineText.length > 0 && !isPageNumber && !isFooter) {
+      lines.push(lineText);
+    }
+  }
+  
+  return lines;
+}
+
 async function extractTextFromPDF(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -784,88 +833,137 @@ async function extractTextFromPDF(file) {
         let fullText = '';
         
         console.log(`PDF has ${pdf.numPages} page(s)`);
+        let useTesseractOnly = false;
         
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
           
-          // Group text items into lines by Y-coordinate!
-          const linesMap = new Map();
-          for (const item of textContent.items) {
-            const y = Math.round(item.transform[5]);
-            if (!linesMap.has(y)) {
-              linesMap.set(y, []);
-            }
-            linesMap.get(y).push(item);
-          }
-          
-          // Sort lines by Y (top to bottom)
-          const sortedYs = Array.from(linesMap.keys()).sort((a, b) => b - a);
-          
-          // Get page height to calculate header/footer
           const viewport = page.getViewport({ scale: 1.0 });
+          const pageWidth = viewport.width;
           const pageHeight = viewport.height;
+          const columnSplitX = pageWidth / 2;
           
-          // For each line: sort items by X and join to make text, skip header/footer
-          let pageLines = [];
-          for (const y of sortedYs) {
-            // Skip if line is in header (top 10%) or footer (bottom 10%)
-            const relativeY = y / pageHeight;
-            if (relativeY > 0.9 || relativeY < 0.1) {
-              continue;
-            }
-            
-            const items = linesMap.get(y);
-            items.sort((a, b) => a.transform[4] - b.transform[4]);
-            const lineText = items.map(i => i.str).join('').trim();
-            
-            // Skip lines that look like page numbers or footers
-            const isPageNumber = /^\s*\d+\s*$/.test(lineText); // Just a number
-            const isFooter = /^page\s+\d+$/i.test(lineText) || /^chapter\s+\d+$/i.test(lineText);
-            
-            if (lineText.length > 0 && !isPageNumber && !isFooter) {
-              pageLines.push(lineText);
-            }
-          }
+          const allItems = textContent.items
+            .filter(item => item && item.transform && item.transform.length >= 6)
+            .map(item => ({
+              str: item.str,
+              x: item.transform[4],
+              y: Math.round(item.transform[5])
+            }));
           
-          // If page has very little text, try OCR!
-          let totalChars = pageLines.reduce((sum, line) => sum + line.length, 0);
+          const leftItems = allItems.filter(item => item.x < columnSplitX);
+          const rightItems = allItems.filter(item => item.x >= columnSplitX);
+          
+          let pageLines = [...processItemsToLines(leftItems, pageHeight), ...processItemsToLines(rightItems, pageHeight)];
+          
+          const totalChars = pageLines.reduce((sum, line) => sum + line.length, 0);
+          
           if (totalChars < 50) {
             console.log(`Page ${i} has only ${totalChars} chars, trying OCR...`);
             
             try {
-              // Render page to canvas
               const viewport = page.getViewport({ scale: 2.0 });
               const canvas = document.createElement('canvas');
               const context = canvas.getContext('2d');
               canvas.width = viewport.width;
               canvas.height = viewport.height;
               
+              context.fillStyle = '#FFFFFF';
+              context.fillRect(0, 0, canvas.width, canvas.height);
+              
               await page.render({ canvasContext: context, viewport: viewport }).promise;
               
-              // Use Tesseract to OCR the canvas
-              const result = await Tesseract.recognize(
-                canvas,
-                'eng',
-                {
-                  logger: m => console.log(`OCR progress (page ${i}):`, m)
-                }
-              );
+              let ocrText = '';
+              let ocrSuccess = false;
               
-              const ocrText = result.data.text;
+              if (!useTesseractOnly) {
+                console.log(`Trying OCR.space API for page ${i}...`);
+                
+                try {
+                  const imageBlob = await new Promise((resolve) => {
+                    canvas.toBlob(resolve, 'image/jpeg', 0.7);
+                  });
+                  
+                  currentApiKeyIndex = (currentApiKeyIndex + 1) % OCR_SPACE_API_KEYS.length;
+                  const currentApiKey = OCR_SPACE_API_KEYS[currentApiKeyIndex];
+                  
+                  const formData = new FormData();
+                  formData.append('file', imageBlob, 'page.jpg');
+                  formData.append('apikey', currentApiKey);
+                  formData.append('language', 'eng');
+                  formData.append('isOverlayRequired', 'false');
+                  formData.append('detectOrientation', 'true');
+                  formData.append('scale', 'true');
+                  formData.append('OCREngine', '2');
+                  
+                  const response = await fetch(OCR_SPACE_API_URL, {
+                    method: 'POST',
+                    body: formData
+                  });
+                  
+                  const data = await response.json();
+                  
+                  const isRateLimit = data.ErrorDetails?.includes('E553') || data.error?.includes('E553') || data.ErrorDetails?.includes('Rate limit') || data.error?.includes('Rate limit');
+                  
+                  if (isRateLimit) {
+                    console.log(`OCR.space API rate limit hit for current key! Trying next key if available...`);
+                  } else if (data.IsErroredOnProcessing === false && data.ParsedResults && data.ParsedResults.length > 0) {
+                    ocrText = data.ParsedResults[0].ParsedText || '';
+                    ocrSuccess = true;
+                    console.log(`OCR.space API succeeded for page ${i}!`);
+                  } else {
+                    console.log(`OCR.space API failed for page ${i}:`, data.ErrorDetails || data);
+                  }
+                } catch (apiErr) {
+                  console.log(`OCR.space API failed, falling back to Tesseract:`, apiErr);
+                }
+              }
+              
+              if (!ocrSuccess || useTesseractOnly) {
+                console.log(`Using Tesseract for page ${i}...`);
+                
+                const result = await Tesseract.recognize(
+                  canvas,
+                  'eng',
+                  {
+                    logger: m => console.log(`Tesseract OCR progress (page ${i}):`, m),
+                    tessedit_pageseg_mode: Tesseract.PSM.SINGLE_COLUMN,
+                    preserve_interword_spaces: '1',
+                    tessedit_ocr_engine_mode: Tesseract.OEM.DEFAULT,
+                    textord_heavy_nr: '1',
+                    textord_noskew: '0',
+                    textord_skew_allow: '1',
+                    language_model_penalty_non_dict_word: '0',
+                    language_model_penalty_non_freq_dict_word: '0',
+                    chop_enable: '1',
+                    use_new_state_cost: '1',
+                    segment_segcost_rating: '1',
+                    enable_new_segsearch: '1'
+                  }
+                );
+                
+                ocrText = result.data.text;
+                console.log(`Tesseract OCR complete for page ${i}!`);
+              }
+              
+              if (!useTesseractOnly) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+              
               pageLines = ocrText.split('\n').filter(line => line.trim().length > 0);
               console.log(`OCR got ${pageLines.length} lines, ${ocrText.length} chars`);
             } catch (ocrErr) {
               console.error(`OCR failed for page ${i}:`, ocrErr);
             }
+          } else {
+            console.log(`Page ${i} has ${totalChars} chars of normal text, using that!`);
           }
           
-          // Add page break marker
           if (i > 1) {
             fullText += '\n---PAGE_BREAK---\n';
           }
           
-          // Mark first line of page as TOP_OF_PAGE!
           if (pageLines.length > 0) {
             pageLines[0] = '---TOP_OF_PAGE---' + pageLines[0];
           }
@@ -1004,6 +1102,7 @@ function extractMonstersFromPDFText(text) {
   // Check if we should end the current monster
   const shouldEndMonster = (idx, processedLines, currentBuffer) => {
     if (idx >= processedLines.length - 1) {
+      console.log(`shouldEndMonster: ending at line ${idx} (end of lines)`);
       return true;
     }
     
@@ -1011,17 +1110,21 @@ function extractMonstersFromPDFText(text) {
     const lineUpper = line.toUpperCase();
     
     // Check for stop keywords
-    if (stopKeywords.some(kw => lineUpper.includes(kw))) {
+    const matchingStopKeyword = stopKeywords.find(kw => lineUpper.includes(kw));
+    if (matchingStopKeyword) {
+      console.log(`shouldEndMonster: ending at line ${idx} (matched stop keyword "${matchingStopKeyword}"):`, line.substring(0, 80));
       return true;
     }
     
     // Check if next line is a new monster start
     if (isMonsterStart(processedLines[idx + 1].text, idx + 1, processedLines)) {
+      console.log(`shouldEndMonster: ending at line ${idx} (next line is new monster start):`, processedLines[idx + 1].text.substring(0, 80));
       return true;
     }
     
     // Safety check: buffer is way too long
-    if (currentBuffer.length > 500) {
+    if (currentBuffer.length > 2000) {
+      console.log(`shouldEndMonster: ending at line ${idx} (buffer too long: ${currentBuffer.length} lines)`);
       return true;
     }
     

@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import http from 'http';
 import https from 'https';
+import axios from 'axios';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -170,7 +171,7 @@ app.post('/api/upload-image', async (req, res) => {
     }
 });
 
-// Proxy Endpoint to bypass CORS
+// Proxy Endpoint to bypass CORS (GET)
 app.get('/api/proxy', (req, res) => {
     const { url } = req.query;
     if (!url) {
@@ -182,16 +183,11 @@ app.get('/api/proxy', (req, res) => {
         const protocol = targetUrl.protocol === 'https:' ? https : http;
         
         const proxyReq = protocol.get(url, (proxyRes) => {
-            // Forward status
             res.status(proxyRes.statusCode);
-            
-            // Forward content-type
             if (proxyRes.headers['content-type']) {
                 res.setHeader('Content-Type', proxyRes.headers['content-type']);
             }
-            // Ensure CORS is allowed (though global cors middleware handles this usually)
             res.setHeader('Access-Control-Allow-Origin', '*');
-
             proxyRes.pipe(res);
         }).on('error', (e) => {
             console.error(`Proxy error for ${url}:`, e);
@@ -200,6 +196,33 @@ app.get('/api/proxy', (req, res) => {
         
     } catch (e) {
         res.status(400).json({ error: 'Invalid URL', details: e.message });
+    }
+});
+
+// Proxy Endpoint to bypass CORS (POST) - for AI API
+app.post('/api/proxy', async (req, res) => {
+    const { url, ...body } = req.body;
+    if (!url) {
+        return res.status(400).json({ error: 'Missing url parameter' });
+    }
+
+    try {
+        console.log(`Proxying POST request to ${url}`);
+        const response = await axios.post(url, body, {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        console.log(`Proxy response status: ${response.status}`);
+        res.status(response.status).json(response.data);
+    } catch (e) {
+        console.error(`POST proxy error for ${url}:`, e.message);
+        if (e.response) {
+            console.error('Response data:', e.response.data);
+            res.status(e.response.status).json(e.response.data);
+        } else {
+            res.status(500).json({ error: 'Proxy request failed', details: e.message });
+        }
     }
 });
 
