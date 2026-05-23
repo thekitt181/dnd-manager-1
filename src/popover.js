@@ -2652,6 +2652,18 @@ export function searchItems(query) {
   } else {
       console.log("No spawn position in URL");
   }
+  
+  // Check if current user is GM
+  let isGM = true; // Default to true for local development
+  try {
+      if (window.self !== window.top && OBR && OBR.player) {
+          const role = await OBR.player.getRole();
+          isGM = role === 'GM';
+      }
+  } catch (e) {
+      console.warn("Could not get player role, defaulting to GM", e);
+  }
+  console.log("isGM:", isGM);
 
   const app = document.getElementById('app');
   app.innerHTML = `
@@ -2671,10 +2683,10 @@ export function searchItems(query) {
     </div>
     <div style="padding: 10px; font-family: sans-serif; height: calc(100% - 24px); display: flex; flex-direction: column;">
       <div id="tabs" style="display: flex; gap: 5px; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
-        <button id="tab-monsters" style="flex: 1; padding: 5px; cursor: pointer; background: #ddd; border: none; font-weight: bold;">Monsters</button>
-        <button id="tab-items" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Items</button>
+        ${isGM ? '<button id="tab-monsters" style="flex: 1; padding: 5px; cursor: pointer; background: #ddd; border: none; font-weight: bold;">Monsters</button>' : ''}
+        <button id="tab-items" style="flex: 1; padding: 5px; cursor: pointer; background: ${isGM ? '#f0f0f0' : '#ddd'}; border: none; ${!isGM ? 'font-weight: bold;' : ''}">Items</button>
         <button id="tab-spells" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Spells</button>
-        <button id="tab-custom" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Custom</button>
+        ${isGM ? '<button id="tab-custom" style="flex: 1; padding: 5px; cursor: pointer; background: #f0f0f0; border: none;">Custom</button>' : ''}
       </div>
 
       <div id="search-view" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
@@ -2684,7 +2696,7 @@ export function searchItems(query) {
             <button id="create-btn" style="padding: 0 10px; font-weight: bold; font-size: 1.2em; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px;" title="Create Custom Entry">+</button>
         </div>
         
-        <div id="global-settings" style="margin-bottom: 5px; display: flex; gap: 10px; flex-wrap: wrap; padding: 5px; background: #eee; border-radius: 4px;">
+        ${isGM ? `<div id="global-settings" style="margin-bottom: 5px; display: flex; gap: 10px; flex-wrap: wrap; padding: 5px; background: #eee; border-radius: 4px;">
             <label style="font-size: 0.8em; cursor: pointer; color: #333; font-weight: bold;">
                 <input type="checkbox" id="hide-name-checkbox"> Hide Name
             </label>
@@ -2697,9 +2709,9 @@ export function searchItems(query) {
             <label style="font-size: 0.8em; cursor: pointer; color: #333; font-weight: bold;">
                 <input type="checkbox" id="hide-cr-checkbox"> Hide CR
             </label>
-        </div>
+        </div>` : ''}
         
-        <div id="pdf-upload-section" style="margin-bottom: 10px; padding: 10px; background: #f0f8ff; border: 2px dashed #4a90d9; border-radius: 6px; text-align: center;">
+        ${isGM ? `<div id="pdf-upload-section" style="margin-bottom: 10px; padding: 10px; background: #f0f8ff; border: 2px dashed #4a90d9; border-radius: 6px; text-align: center;">
             <div style="font-size: 0.9em; font-weight: bold; color: #333; margin-bottom: 8px;">📄 Upload PDF for Monster/Item Extraction</div>
             <input type="file" id="pdf-upload-input" accept=".pdf,application/pdf" style="display: none;">
             <button id="pdf-upload-btn" style="padding: 8px 16px; background: #4a90d9; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
@@ -2714,9 +2726,9 @@ export function searchItems(query) {
             <div id="pdf-upload-status" style="margin-top: 8px; font-size: 0.8em; color: #666;"></div>
             <div id="pdf-extracted-monsters" style="margin-top: 10px; display: none; text-align: left; max-height: 200px; overflow-y: auto; background: white; border: 1px solid #ddd; border-radius: 4px; padding: 8px;">
             </div>
-        </div>
+        </div>` : ''}
 
-        <div id="monster-filters" style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px;">
+        ${isGM ? `<div id="monster-filters" style="margin-bottom: 10px; display: flex; flex-direction: column; gap: 5px;">
           <label style="font-size: 0.9em; cursor: pointer;">
               <input type="checkbox" id="search-name-only"> Search Name Only
           </label>
@@ -2726,7 +2738,7 @@ export function searchItems(query) {
               <span>-</span>
               <input type="text" id="max-cr-input" placeholder="Max (30)" style="width: 50px; padding: 2px;">
           </div>
-      </div>
+      </div>` : ''}
 
       <div id="spell-tools" style="display: none; margin-bottom: 10px; background: #f9f9f9; padding: 8px; border: 1px solid #ddd; border-radius: 4px; flex-direction: column; gap: 5px;">
           <div style="font-size: 0.9em; font-weight: bold; margin-bottom: 2px;">Quick AoE Template</div>
@@ -2828,7 +2840,7 @@ export function searchItems(query) {
     </div>
   `;
 
-  let activeTab = 'monsters'; // 'monsters' | 'items'
+  let activeTab = isGM ? 'monsters' : 'items'; // Default to items for non-GM
 
   const tabMonsters = document.getElementById('tab-monsters');
   const tabItems = document.getElementById('tab-items');
@@ -2842,19 +2854,25 @@ export function searchItems(query) {
   const quickAoeSize = document.getElementById('quick-aoe-size');
   
   const input = document.getElementById('search-input');
-  const searchNameOnlyCheckbox = document.getElementById('search-name-only');
-  const hideNameCheckbox = document.getElementById('hide-name-checkbox');
-  const hideHpCheckbox = document.getElementById('hide-hp-checkbox');
-  const hideAcCheckbox = document.getElementById('hide-ac-checkbox');
-  const hideCrCheckbox = document.getElementById('hide-cr-checkbox');
+  const searchNameOnlyCheckbox = isGM ? document.getElementById('search-name-only') : null;
+  const minCrInput = isGM ? document.getElementById('min-cr-input') : null;
+  const maxCrInput = isGM ? document.getElementById('max-cr-input') : null;
+  const hideNameCheckbox = isGM ? document.getElementById('hide-name-checkbox') : null;
+  const hideHpCheckbox = isGM ? document.getElementById('hide-hp-checkbox') : null;
+  const hideAcCheckbox = isGM ? document.getElementById('hide-ac-checkbox') : null;
+  const hideCrCheckbox = isGM ? document.getElementById('hide-cr-checkbox') : null;
 
-  // Load hide settings
-  hideNameCheckbox.checked = localStorage.getItem('dnd_extension_hide_name') === 'true';
-  hideHpCheckbox.checked = localStorage.getItem('dnd_extension_hide_hp') === 'true';
-  hideAcCheckbox.checked = localStorage.getItem('dnd_extension_hide_ac') === 'true';
-  hideCrCheckbox.checked = localStorage.getItem('dnd_extension_hide_cr') === 'true';
+  // Load hide settings only if GM
+  if (isGM) {
+      hideNameCheckbox.checked = localStorage.getItem('dnd_extension_hide_name') === 'true';
+      hideHpCheckbox.checked = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+      hideAcCheckbox.checked = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+      hideCrCheckbox.checked = localStorage.getItem('dnd_extension_hide_cr') === 'true';
+  }
 
   const updateAllTokensOnMap = async () => {
+      if (!isGM) return; // Only GM can update tokens
+      
       const hName = hideNameCheckbox.checked;
       const hHP = hideHpCheckbox.checked;
       const hAC = hideAcCheckbox.checked;
@@ -2945,25 +2963,25 @@ export function searchItems(query) {
       }
   };
 
-  hideNameCheckbox.addEventListener('change', () => {
-      localStorage.setItem('dnd_extension_hide_name', hideNameCheckbox.checked);
-      updateAllTokensOnMap();
-  });
-  hideHpCheckbox.addEventListener('change', () => {
-      localStorage.setItem('dnd_extension_hide_hp', hideHpCheckbox.checked);
-      updateAllTokensOnMap();
-  });
-  hideAcCheckbox.addEventListener('change', () => {
-      localStorage.setItem('dnd_extension_hide_ac', hideAcCheckbox.checked);
-      updateAllTokensOnMap();
-  });
-  hideCrCheckbox.addEventListener('change', () => {
-      localStorage.setItem('dnd_extension_hide_cr', hideCrCheckbox.checked);
-      updateAllTokensOnMap();
-  });
+  if (isGM) {
+      hideNameCheckbox.addEventListener('change', () => {
+          localStorage.setItem('dnd_extension_hide_name', hideNameCheckbox.checked);
+          updateAllTokensOnMap();
+      });
+      hideHpCheckbox.addEventListener('change', () => {
+          localStorage.setItem('dnd_extension_hide_hp', hideHpCheckbox.checked);
+          updateAllTokensOnMap();
+      });
+      hideAcCheckbox.addEventListener('change', () => {
+          localStorage.setItem('dnd_extension_hide_ac', hideAcCheckbox.checked);
+          updateAllTokensOnMap();
+      });
+      hideCrCheckbox.addEventListener('change', () => {
+          localStorage.setItem('dnd_extension_hide_cr', hideCrCheckbox.checked);
+          updateAllTokensOnMap();
+      });
+  }
 
-  const minCrInput = document.getElementById('min-cr-input');
-  const maxCrInput = document.getElementById('max-cr-input');
   const resultsDiv = document.getElementById('results');
   const searchView = document.getElementById('search-view');
   const statsView = document.getElementById('stats-view');
@@ -3888,25 +3906,29 @@ export function searchItems(query) {
   const switchTab = (tab) => {
       activeTab = tab;
       
-      // Reset all tabs
-      tabMonsters.style.background = '#f0f0f0';
-      tabMonsters.style.fontWeight = 'normal';
+      // Reset all tabs (only if they exist)
+      if (tabMonsters) {
+          tabMonsters.style.background = '#f0f0f0';
+          tabMonsters.style.fontWeight = 'normal';
+      }
       tabItems.style.background = '#f0f0f0';
       tabItems.style.fontWeight = 'normal';
       tabSpells.style.background = '#f0f0f0';
       tabSpells.style.fontWeight = 'normal';
-      tabCustom.style.background = '#f0f0f0';
-      tabCustom.style.fontWeight = 'normal';
+      if (tabCustom) {
+          tabCustom.style.background = '#f0f0f0';
+          tabCustom.style.fontWeight = 'normal';
+      }
       
-      monsterFilters.style.display = 'none';
+      if (monsterFilters) monsterFilters.style.display = 'none';
       if (globalSettings) globalSettings.style.display = 'none';
       spellTools.style.display = 'none';
       if (randomBtn) randomBtn.style.display = 'none';
 
-      if (tab === 'monsters') {
+      if (tab === 'monsters' && tabMonsters) {
           tabMonsters.style.background = '#ddd';
           tabMonsters.style.fontWeight = 'bold';
-          monsterFilters.style.display = 'flex';
+          if (monsterFilters) monsterFilters.style.display = 'flex';
           if (globalSettings) globalSettings.style.display = 'flex';
           input.placeholder = "Search monsters (e.g. Goblin)...";
       } else if (tab === 'items') {
@@ -3920,7 +3942,7 @@ export function searchItems(query) {
           tabSpells.style.fontWeight = 'bold';
           spellTools.style.display = 'flex';
           input.placeholder = "Search spells (e.g. Fireball)...";
-      } else if (tab === 'custom') {
+      } else if (tab === 'custom' && tabCustom) {
           tabCustom.style.background = '#ddd';
           tabCustom.style.fontWeight = 'bold';
           input.placeholder = "Search custom entries...";
@@ -3928,10 +3950,10 @@ export function searchItems(query) {
       renderResults(input.value);
   };
 
-  tabMonsters.addEventListener('click', () => switchTab('monsters'));
+  if (tabMonsters) tabMonsters.addEventListener('click', () => switchTab('monsters'));
   tabItems.addEventListener('click', () => switchTab('items'));
   tabSpells.addEventListener('click', () => switchTab('spells'));
-  tabCustom.addEventListener('click', () => switchTab('custom'));
+  if (tabCustom) tabCustom.addEventListener('click', () => switchTab('custom'));
 
   // Random Item Logic
   if (randomBtn) {
@@ -4269,11 +4291,19 @@ export function searchItems(query) {
   });
 
   const showStats = (data, itemId) => {
+    const isSpell = data.level !== undefined || data.school !== undefined || (data.aoe !== undefined);
+    const isItem = !isSpell && (!data.hp && !data.ac);
+    const isMonster = !isSpell && !isItem;
+    
+    // Check if trying to show monster stats but not GM
+    if (isMonster && !isGM) {
+        alert("Only the GM can view monster stats!");
+        return;
+    }
+    
     searchView.style.display = 'none';
     statsView.style.display = 'block';
     
-    const isSpell = data.level !== undefined || data.school !== undefined || (data.aoe !== undefined);
-    const isItem = !isSpell && (!data.hp && !data.ac);
     const entryName = data.name.split('\n')[0];
     // Store data in data attributes
     statsContent.dataset.entryName = entryName;
@@ -5646,10 +5676,10 @@ export function searchItems(query) {
   const renderResults = (query) => {
     let html = '';
     
-    if (activeTab === 'monsters') {
-        const searchNameOnly = searchNameOnlyCheckbox.checked;
-        const minCr = minCrInput.value.trim();
-        const maxCr = maxCrInput.value.trim();
+    if (activeTab === 'monsters' && isGM) {
+        const searchNameOnly = searchNameOnlyCheckbox ? searchNameOnlyCheckbox.checked : false;
+        const minCr = minCrInput ? minCrInput.value.trim() : '';
+        const maxCr = maxCrInput ? maxCrInput.value.trim() : '';
         const results = searchMonsters(query, searchNameOnly, minCr, maxCr);
         
         html = results.map((m, index) => `
@@ -5674,7 +5704,7 @@ export function searchItems(query) {
             <small>Lvl ${spell.level !== undefined ? spell.level : '?'} ${spell.school || ''} | ${spell.source || 'SRD'}</small>
           </div>
         `).join('');
-    } else if (activeTab === 'custom') {
+    } else if (activeTab === 'custom' && isGM) {
         const customMonsters = getCustomMonsters();
         const customItems = getCustomItems();
         const customSpells = getCustomSpells();
@@ -5693,6 +5723,26 @@ export function searchItems(query) {
           <div class="result-card custom-card" data-index="${index}" style="border: 1px solid #ccc; padding: 12px; margin-bottom: 5px; cursor: pointer; background: #f0f8ff; color: #000; border-radius: 4px;">
             <strong>${item.name}</strong> [${item.type}]<br>
             <small>${item.type === 'Monster' ? `HP: ${item.hp || '?'}, AC: ${item.ac || '?'}, CR: ${item.cr || '?'}` : item.type === 'Spell' ? `Lvl ${item.level !== undefined ? item.level : '?'} ${item.school || ''}` : item.type || ''}</small>
+          </div>
+        `).join('');
+    } else if (activeTab === 'custom' && !isGM) {
+        const customItems = getCustomItems();
+        const customSpells = getCustomSpells();
+        const allCustom = [...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
+        
+        let results = allCustom;
+        if (query) {
+            const lowerQuery = query.toLowerCase();
+            results = allCustom.filter(item => 
+                item.name.toLowerCase().includes(lowerQuery) || 
+                (item.description && item.description.toLowerCase().includes(lowerQuery))
+            );
+        }
+        
+        html = results.map((item, index) => `
+          <div class="result-card custom-card" data-index="${index}" style="border: 1px solid #ccc; padding: 12px; margin-bottom: 5px; cursor: pointer; background: #f0f8ff; color: #000; border-radius: 4px;">
+            <strong>${item.name}</strong> [${item.type}]<br>
+            <small>${item.type === 'Spell' ? `Lvl ${item.level !== undefined ? item.level : '?'} ${item.school || ''}` : item.type || ''}</small>
           </div>
         `).join('');
     }
@@ -5859,10 +5909,10 @@ export function searchItems(query) {
       card.addEventListener('click', async () => {
         const index = parseInt(card.dataset.index, 10);
         
-        if (activeTab === 'monsters') {
-            const searchNameOnly = searchNameOnlyCheckbox.checked;
-            const minCr = minCrInput.value.trim();
-            const maxCr = maxCrInput.value.trim();
+        if (activeTab === 'monsters' && isGM) {
+            const searchNameOnly = searchNameOnlyCheckbox ? searchNameOnlyCheckbox.checked : false;
+            const minCr = minCrInput ? minCrInput.value.trim() : '';
+            const maxCr = maxCrInput ? maxCrInput.value.trim() : '';
             const results = searchMonsters(query, searchNameOnly, minCr, maxCr);
             const monster = results[index];
             await handleMonsterClick(monster);
@@ -5875,14 +5925,22 @@ export function searchItems(query) {
             const spell = results[index];
             showStats(spell);
         } else if (activeTab === 'custom') {
-            const customMonsters = getCustomMonsters();
-            const customItems = getCustomItems();
-            const customSpells = getCustomSpells();
-            const allCustom = [...customMonsters.map(m => ({...m, type: 'Monster'})), ...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
-            const item = allCustom[index];
-            if (item.type === 'Monster') {
-                await handleMonsterClick(item);
+            if (isGM) {
+                const customMonsters = getCustomMonsters();
+                const customItems = getCustomItems();
+                const customSpells = getCustomSpells();
+                const allCustom = [...customMonsters.map(m => ({...m, type: 'Monster'})), ...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
+                const item = allCustom[index];
+                if (item.type === 'Monster') {
+                    await handleMonsterClick(item);
+                } else {
+                    showStats(item);
+                }
             } else {
+                const customItems = getCustomItems();
+                const customSpells = getCustomSpells();
+                const allCustom = [...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
+                const item = allCustom[index];
                 showStats(item);
             }
         }
@@ -5891,9 +5949,9 @@ export function searchItems(query) {
   };
 
   input.addEventListener('input', (e) => renderResults(e.target.value));
-  searchNameOnlyCheckbox.addEventListener('change', () => renderResults(input.value));
-  minCrInput.addEventListener('input', () => renderResults(input.value));
-  maxCrInput.addEventListener('input', () => renderResults(input.value));
+  if (searchNameOnlyCheckbox) searchNameOnlyCheckbox.addEventListener('change', () => renderResults(input.value));
+  if (minCrInput) minCrInput.addEventListener('input', () => renderResults(input.value));
+  if (maxCrInput) maxCrInput.addEventListener('input', () => renderResults(input.value));
   
   renderResults(''); // Initial render
 
@@ -5916,7 +5974,19 @@ export function searchItems(query) {
                              (item.metadata.hp !== undefined && item.metadata.ac !== undefined)
                          );
                          
+                         // Check if it's a monster
+                         const isMonster = item.metadata && (
+                             item.metadata.created_by === 'dnd_extension' || 
+                             (item.metadata.hp !== undefined && item.metadata.ac !== undefined)
+                         );
+                         
                          if (isExtensionObj) {
+                            // If it's a monster and not GM, skip
+                            if (isMonster && !isGM) {
+                                console.log("Player tried to view monster stats, blocked.");
+                                return;
+                            }
+                            
                             const m = item.metadata;
                             // Prefer metadata name, fallback to first line of text
                             const name = m.name || (item.text && item.text.plainText ? item.text.plainText.split('\n')[0] : "Unknown");
@@ -5953,8 +6023,20 @@ export function searchItems(query) {
                                  item.metadata.created_by === 'dnd_extension_item' ||
                                  (item.metadata.hp !== undefined && item.metadata.ac !== undefined)
                              );
-
+                             
+                             // Check if it's a monster
+                             const isMonster = item.metadata && (
+                                 item.metadata.created_by === 'dnd_extension' || 
+                                 (item.metadata.hp !== undefined && item.metadata.ac !== undefined)
+                             );
+                             
                              if (isExtensionObj) {
+                                // If it's a monster and not GM, skip
+                                if (isMonster && !isGM) {
+                                    console.log("Player tried to view monster stats, blocked.");
+                                    return;
+                                }
+                                
                                 const m = item.metadata;
                                 const name = m.name || (item.text && item.text.plainText ? item.text.plainText.split('\n')[0] : "Unknown");
                                 
@@ -5987,8 +6069,20 @@ export function searchItems(query) {
                          item.metadata.created_by === 'dnd_extension_item' ||
                          (item.metadata.hp !== undefined && item.metadata.ac !== undefined)
                      );
-
+                     
+                     // Check if it's a monster
+                     const isMonster = item.metadata && (
+                         item.metadata.created_by === 'dnd_extension' || 
+                         (item.metadata.hp !== undefined && item.metadata.ac !== undefined)
+                     );
+                     
                      if (isExtensionObj) {
+                        // If it's a monster and not GM, skip
+                        if (isMonster && !isGM) {
+                            console.log("Player tried to view monster stats, blocked.");
+                            return;
+                        }
+                        
                         // Show stats for this item
                         const m = item.metadata;
                         const name = m.name || (item.text && item.text.plainText ? item.text.plainText.split('\n')[0] : "Unknown");
