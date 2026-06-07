@@ -200,9 +200,9 @@ function parseMonsterActions(description) {
       };
       
       // Attack
-      const attackMatch = action.fullText.match(/([+-]\d+)\s*to\s*hit/);
+      const attackMatch = action.fullText.match(/(?:Melee Weapon Attack:|Ranged Weapon Attack:|Weapon Attack:)\s*([+-]?\d+)\s*to\s*hit/i);
       if (attackMatch) {
-          details.toHit = parseInt(attackMatch[1], 10);
+        details.toHit = parseInt(attackMatch[1], 10);
       }
       
       // Save
@@ -226,10 +226,17 @@ function parseMonsterActions(description) {
           };
       }
 
-      // Damage (Find all occurrences)
-      // Matches: "Hit: 5 (1d10) fire damage", "take 5 (1d10) fire damage", "takes 5 (1d10) fire damage", "plus 2 (1d4) acid damage"
-      // Allows punctuation between type and "damage" (e.g. "bludgeoning, damage")
-      // Uses non-greedy capture ([\s\S]*?) for type to handle complex descriptions including newlines like "radiant (good...) or necrotic (evil \n eyes)"
+      // Damage: FIRST look for ANY dice notation without parentheses (your screenshot format!)
+      const anyDiceRegex = /(\d+d\d+(?:\s*[+-]\s*\d+)?)/gi;
+      let anyDiceMatch;
+      while ((anyDiceMatch = anyDiceRegex.exec(action.fullText)) !== null) {
+          details.damages.push({
+              dice: anyDiceMatch[1],
+              type: 'Damage'
+          });
+      }
+
+      // Then also check for parenthesized dice notation (standard format) as backup
       const damageRegex = /(?:Hit:|takes?|plus)\s*(?:\d+)?\s*\(((\d+d\d+)(?:\s*[+-]\s*\d+)?)\)\s*([\s\S]*?)\s*damage/gi;
       let match;
       while ((match = damageRegex.exec(action.fullText)) !== null) {
@@ -238,6 +245,15 @@ function parseMonsterActions(description) {
               type: match[3] || 'Damage' // e.g. "fire"
           });
       }
+      
+      // Remove duplicates (same dice expression)
+      const seenDice = new Set();
+      details.damages = details.damages.filter(damage => {
+          const normalized = damage.dice.replace(/\s+/g, '');
+          if (seenDice.has(normalized)) return false;
+          seenDice.add(normalized);
+          return true;
+      });
 
       // Spells (if Spellcasting or Innate)
       // Match "Spellcasting" (std), "Innate Spellcasting" (std), "Spel/casting" (OCR error)
@@ -1389,9 +1405,189 @@ function saveExtractedItemsToGlobal(items) {
 }
 
 // Custom Data Helpers
+const OVERRIDE_MIGRATION_KEY = 'dnd_extension_overrides_migrated';
+
+function isBuiltInMonster(name) {
+    return monsters.some(m => m.name === name);
+}
+function isBuiltInItem(name) {
+    return items.some(i => i.name === name);
+}
+function isBuiltInSpell(name) {
+    return Object.prototype.hasOwnProperty.call(SPELL_DATA, name);
+}
+function isSourceBookEntry(name, type) {
+    if (type === 'monster') return isBuiltInMonster(name);
+    if (type === 'item') return isBuiltInItem(name);
+    if (type === 'spell') return isBuiltInSpell(name);
+    return false;
+}
+
+function getOverrideMonsters() {
+    try { return JSON.parse(localStorage.getItem('dnd_extension_override_monsters') || '[]'); } catch (e) { return []; }
+}
+function getOverrideItems() {
+    try { return JSON.parse(localStorage.getItem('dnd_extension_override_items') || '[]'); } catch (e) { return []; }
+}
+function getOverrideSpells() {
+    try { return JSON.parse(localStorage.getItem('dnd_extension_override_spells') || '[]'); } catch (e) { return []; }
+}
+
 function getCustomMonsters() {
     try { return JSON.parse(localStorage.getItem('dnd_extension_custom_monsters') || '[]'); } catch (e) { return []; }
 }
+function getCustomItems() {
+    try { return JSON.parse(localStorage.getItem('dnd_extension_custom_items') || '[]'); } catch (e) { return []; }
+}
+function getCustomSpells() {
+    try { return JSON.parse(localStorage.getItem('dnd_extension_custom_spells') || '[]'); } catch (e) { return []; }
+}
+
+function preserveSourceBookMetadata(entry, type) {
+    let builtIn = null;
+    if (type === 'monster') builtIn = monsters.find(m => m.name === entry.name);
+    else if (type === 'item') builtIn = items.find(i => i.name === entry.name);
+    else if (type === 'spell') {
+        const spellData = SPELL_DATA[entry.name];
+        if (spellData) builtIn = { name: entry.name, ...spellData };
+    }
+    if (!builtIn) return entry;
+    return { ...builtIn, ...entry, source: builtIn.source || entry.source };
+}
+
+function saveOverrideMonster(monster) {
+    const list = getOverrideMonsters();
+    const entry = preserveSourceBookMetadata(monster, 'monster');
+    const index = list.findIndex(m => m.name === entry.name);
+    if (index >= 0) list[index] = entry;
+    else list.push(entry);
+    localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(list));
+    const customs = getCustomMonsters().filter(m => m.name !== entry.name);
+    localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customs));
+    saveToBackend();
+    restoreItem(entry.name);
+    return true;
+}
+function saveOverrideItem(item) {
+    const list = getOverrideItems();
+    const entry = preserveSourceBookMetadata(item, 'item');
+    const index = list.findIndex(i => i.name === entry.name);
+    if (index >= 0) list[index] = entry;
+    else list.push(entry);
+    localStorage.setItem('dnd_extension_override_items', JSON.stringify(list));
+    const customs = getCustomItems().filter(i => i.name !== entry.name);
+    localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customs));
+    saveToBackend();
+    restoreItem(entry.name);
+    return true;
+}
+function saveOverrideSpell(spell) {
+    const list = getOverrideSpells();
+    const entry = preserveSourceBookMetadata(spell, 'spell');
+    const index = list.findIndex(s => s.name === entry.name);
+    if (index >= 0) list[index] = entry;
+    else list.push(entry);
+    localStorage.setItem('dnd_extension_override_spells', JSON.stringify(list));
+    const customs = getCustomSpells().filter(s => s.name !== entry.name);
+    localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customs));
+    saveToBackend();
+    restoreItem(entry.name);
+    return true;
+}
+
+function saveMonsterEntry(monster, { originalName = null } = {}) {
+    const sourceName = originalName || monster.name;
+    if (isBuiltInMonster(sourceName) && monster.name === sourceName) {
+        return saveOverrideMonster(monster);
+    }
+    return saveCustomMonster(monster);
+}
+function saveItemEntry(item, { originalName = null } = {}) {
+    const sourceName = originalName || item.name;
+    if (isBuiltInItem(sourceName) && item.name === sourceName) {
+        return saveOverrideItem(item);
+    }
+    return saveCustomItem(item);
+}
+function saveSpellEntry(spell, { originalName = null } = {}) {
+    const sourceName = originalName || spell.name;
+    if (isBuiltInSpell(sourceName) && spell.name === sourceName) {
+        return saveOverrideSpell(spell);
+    }
+    return saveCustomSpell(spell);
+}
+
+function getMonsterByName(name) {
+    return getOverrideMonsters().find(m => m.name === name)
+        || getCustomMonsters().find(m => m.name === name)
+        || monsters.find(m => m.name === name)
+        || null;
+}
+function getItemByName(name) {
+    return getOverrideItems().find(i => i.name === name)
+        || getCustomItems().find(i => i.name === name)
+        || items.find(i => i.name === name)
+        || null;
+}
+function getSpellByName(name) {
+    const override = getOverrideSpells().find(s => s.name === name);
+    if (override) return override;
+    const custom = getCustomSpells().find(s => s.name === name);
+    if (custom) return custom;
+    const builtIn = SPELL_DATA[name];
+    return builtIn ? { name, ...builtIn } : null;
+}
+
+function mergeSourceBookEntries(builtIns, overrides, deleted) {
+    const activeBuiltIns = builtIns.filter(entry => !overrides.some(o => o.name === entry.name));
+    return [...activeBuiltIns, ...overrides].filter(entry => !deleted.includes(entry.name));
+}
+
+function migrateLegacyOverrides() {
+    if (localStorage.getItem(OVERRIDE_MIGRATION_KEY)) return;
+
+    const overrideMonsters = getOverrideMonsters();
+    const overrideItems = getOverrideItems();
+    const overrideSpells = getOverrideSpells();
+    let customMonsters = getCustomMonsters();
+    let customItems = getCustomItems();
+    let customSpells = getCustomSpells();
+
+    customMonsters.filter(m => isBuiltInMonster(m.name)).forEach(m => {
+        const idx = overrideMonsters.findIndex(o => o.name === m.name);
+        const entry = preserveSourceBookMetadata(m, 'monster');
+        if (idx === -1) overrideMonsters.push(entry);
+        else overrideMonsters[idx] = { ...overrideMonsters[idx], ...entry };
+    });
+    customMonsters = customMonsters.filter(m => !isBuiltInMonster(m.name));
+
+    customItems.filter(i => isBuiltInItem(i.name)).forEach(i => {
+        const idx = overrideItems.findIndex(o => o.name === i.name);
+        const entry = preserveSourceBookMetadata(i, 'item');
+        if (idx === -1) overrideItems.push(entry);
+        else overrideItems[idx] = { ...overrideItems[idx], ...entry };
+    });
+    customItems = customItems.filter(i => !isBuiltInItem(i.name));
+
+    customSpells.filter(s => isBuiltInSpell(s.name)).forEach(s => {
+        const idx = overrideSpells.findIndex(o => o.name === s.name);
+        const entry = preserveSourceBookMetadata(s, 'spell');
+        if (idx === -1) overrideSpells.push(entry);
+        else overrideSpells[idx] = { ...overrideSpells[idx], ...entry };
+    });
+    customSpells = customSpells.filter(s => !isBuiltInSpell(s.name));
+
+    localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(overrideMonsters));
+    localStorage.setItem('dnd_extension_override_items', JSON.stringify(overrideItems));
+    localStorage.setItem('dnd_extension_override_spells', JSON.stringify(overrideSpells));
+    localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customMonsters));
+    localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customItems));
+    localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customSpells));
+    localStorage.setItem(OVERRIDE_MIGRATION_KEY, '1');
+}
+
+migrateLegacyOverrides();
+
 function restoreItem(name) {
      try {
          let list = JSON.parse(localStorage.getItem('dnd_extension_deleted_items') || '[]');
@@ -1405,40 +1601,148 @@ function restoreItem(name) {
 }
 // Backend Sync Logic
 const API_BASE = '/api';
+const LAST_SYNCED_KEY = 'dnd_extension_last_synced';
+let realtimeSyncStarted = false;
+let realtimeEventSource = null;
+let realtimePollTimer = null;
+let syncInProgress = false;
+let onSyncUIRefresh = null;
 
 function getDeletedItems() {
     try { return JSON.parse(localStorage.getItem('dnd_extension_deleted_items') || '[]'); } catch (e) { return []; }
 }
 
-async function syncWithBackend() {
+function getLastSyncedAt() {
+    return localStorage.getItem(LAST_SYNCED_KEY);
+}
+
+function setLastSyncedAt(value) {
+    if (!value) return;
+    localStorage.setItem(LAST_SYNCED_KEY, new Date(value).toISOString());
+}
+
+function isRemoteNewer(remoteLastUpdated) {
+    if (!remoteLastUpdated) return true;
+    const localLastSynced = getLastSyncedAt();
+    if (!localLastSynced) return true;
+    return new Date(remoteLastUpdated).getTime() > new Date(localLastSynced).getTime();
+}
+
+function refreshUIAfterSync() {
+    if (onSyncUIRefresh) {
+        onSyncUIRefresh();
+    }
+}
+
+async function syncWithBackend({ force = false } = {}) {
+    if (syncInProgress) return false;
+    syncInProgress = true;
     try {
         const res = await fetch(`${API_BASE}/health`);
-        if (!res.ok) return; 
+        if (!res.ok) return false;
+
+        if (!force) {
+            const versionRes = await fetch(`${API_BASE}/data/version`);
+            if (versionRes.ok) {
+                const version = await versionRes.json();
+                if (!isRemoteNewer(version.lastUpdated)) {
+                    return false;
+                }
+            }
+        }
 
         const dataRes = await fetch(`${API_BASE}/data`);
         const data = await dataRes.json();
         
         const localMonsters = getCustomMonsters();
         const localItems = getCustomItems();
+        const localSpells = getCustomSpells();
+        const localOverrideMonsters = getOverrideMonsters();
+        const localOverrideItems = getOverrideItems();
+        const localOverrideSpells = getOverrideSpells();
         const localDeleted = getDeletedItems();
         let changed = false;
 
+        const mergeList = (remoteList, localList, isOverride, type) => {
+            if (!Array.isArray(remoteList)) return;
+            remoteList.forEach(entry => {
+                const normalized = isOverride ? preserveSourceBookMetadata(entry, type) : entry;
+                const idx = localList.findIndex(item => item.name === normalized.name);
+                if (idx === -1) {
+                    localList.push(normalized);
+                    changed = true;
+                } else if (JSON.stringify(localList[idx]) !== JSON.stringify(normalized)) {
+                    localList[idx] = normalized;
+                    changed = true;
+                }
+            });
+        };
+
+        mergeList(data.overrideMonsters, localOverrideMonsters, true, 'monster');
+        mergeList(data.overrideItems, localOverrideItems, true, 'item');
+        mergeList(data.overrideSpells, localOverrideSpells, true, 'spell');
+        localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(localOverrideMonsters));
+        localStorage.setItem('dnd_extension_override_items', JSON.stringify(localOverrideItems));
+        localStorage.setItem('dnd_extension_override_spells', JSON.stringify(localOverrideSpells));
+
         if (data.monsters && Array.isArray(data.monsters)) {
             data.monsters.forEach(m => {
-                const idx = localMonsters.findIndex(lm => lm.name === m.name);
-                if (idx === -1) { localMonsters.push(m); changed = true; }
-                else if (JSON.stringify(localMonsters[idx]) !== JSON.stringify(m)) { localMonsters[idx] = m; changed = true; }
+                if (isBuiltInMonster(m.name)) {
+                    const idx = localOverrideMonsters.findIndex(item => item.name === m.name);
+                    const normalized = preserveSourceBookMetadata(m, 'monster');
+                    if (idx === -1) { localOverrideMonsters.push(normalized); changed = true; }
+                    else if (JSON.stringify(localOverrideMonsters[idx]) !== JSON.stringify(normalized)) {
+                        localOverrideMonsters[idx] = normalized;
+                        changed = true;
+                    }
+                } else {
+                    const idx = localMonsters.findIndex(lm => lm.name === m.name);
+                    if (idx === -1) { localMonsters.push(m); changed = true; }
+                    else if (JSON.stringify(localMonsters[idx]) !== JSON.stringify(m)) { localMonsters[idx] = m; changed = true; }
+                }
             });
-            if (changed) localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(localMonsters));
+            localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(localMonsters));
+            localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(localOverrideMonsters));
         }
         
         if (data.items && Array.isArray(data.items)) {
             data.items.forEach(i => {
-                const idx = localItems.findIndex(li => li.name === i.name);
-                if (idx === -1) { localItems.push(i); changed = true; }
-                else if (JSON.stringify(localItems[idx]) !== JSON.stringify(i)) { localItems[idx] = i; changed = true; }
+                if (isBuiltInItem(i.name)) {
+                    const idx = localOverrideItems.findIndex(item => item.name === i.name);
+                    const normalized = preserveSourceBookMetadata(i, 'item');
+                    if (idx === -1) { localOverrideItems.push(normalized); changed = true; }
+                    else if (JSON.stringify(localOverrideItems[idx]) !== JSON.stringify(normalized)) {
+                        localOverrideItems[idx] = normalized;
+                        changed = true;
+                    }
+                } else {
+                    const idx = localItems.findIndex(li => li.name === i.name);
+                    if (idx === -1) { localItems.push(i); changed = true; }
+                    else if (JSON.stringify(localItems[idx]) !== JSON.stringify(i)) { localItems[idx] = i; changed = true; }
+                }
             });
-            if (changed) localStorage.setItem('dnd_extension_custom_items', JSON.stringify(localItems));
+            localStorage.setItem('dnd_extension_custom_items', JSON.stringify(localItems));
+            localStorage.setItem('dnd_extension_override_items', JSON.stringify(localOverrideItems));
+        }
+
+        if (data.spells && Array.isArray(data.spells)) {
+            data.spells.forEach(s => {
+                if (isBuiltInSpell(s.name)) {
+                    const idx = localOverrideSpells.findIndex(item => item.name === s.name);
+                    const normalized = preserveSourceBookMetadata(s, 'spell');
+                    if (idx === -1) { localOverrideSpells.push(normalized); changed = true; }
+                    else if (JSON.stringify(localOverrideSpells[idx]) !== JSON.stringify(normalized)) {
+                        localOverrideSpells[idx] = normalized;
+                        changed = true;
+                    }
+                } else {
+                    const idx = localSpells.findIndex(ls => ls.name === s.name);
+                    if (idx === -1) { localSpells.push(s); changed = true; }
+                    else if (JSON.stringify(localSpells[idx]) !== JSON.stringify(s)) { localSpells[idx] = s; changed = true; }
+                }
+            });
+            localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(localSpells));
+            localStorage.setItem('dnd_extension_override_spells', JSON.stringify(localOverrideSpells));
         }
 
         if (data.deleted && Array.isArray(data.deleted)) {
@@ -1456,21 +1760,85 @@ async function syncWithBackend() {
                 }
             }
         }
-        
-        if (changed) {
-            console.log('Synced with backend');
-            // Force re-render if we are in the search view
-            const searchView = document.getElementById('search-view');
-            if (searchView && searchView.style.display !== 'none') {
-                const searchInput = document.getElementById('search-input');
-                if (searchInput) {
-                    renderResults(searchInput.value);
+
+        if (data.imagesData && typeof data.imagesData === 'object') {
+            for (const [key, val] of Object.entries(data.imagesData)) {
+                const dataKey = `${key}_data`;
+                if (localStorage.getItem(dataKey) !== val) {
+                    localStorage.setItem(dataKey, val);
+                    changed = true;
                 }
             }
         }
+
+        if (data.entryImages && typeof data.entryImages === 'object') {
+            for (const [name, urls] of Object.entries(data.entryImages)) {
+                const lsKey = `dnd_extension_entry_images_${name}`;
+                const serialized = JSON.stringify(urls);
+                if (localStorage.getItem(lsKey) !== serialized) {
+                    localStorage.setItem(lsKey, serialized);
+                    changed = true;
+                }
+            }
+        }
+        
+        if (data.lastUpdated) {
+            setLastSyncedAt(data.lastUpdated);
+        }
+
+        if (changed) {
+            console.log('Synced with backend');
+            refreshUIAfterSync();
+        }
+        return changed;
     } catch (e) {
         console.warn("Backend sync failed (ignore if offline/static):", e);
+        return false;
+    } finally {
+        syncInProgress = false;
     }
+}
+
+async function handleRemoteDataUpdate(remoteLastUpdated) {
+    if (!isRemoteNewer(remoteLastUpdated)) return;
+    await syncWithBackend({ force: true });
+}
+
+function startRealtimeSync() {
+    if (realtimeSyncStarted) return;
+    realtimeSyncStarted = true;
+
+    if (typeof EventSource !== 'undefined') {
+        try {
+            realtimeEventSource = new EventSource(`${API_BASE}/data/stream`);
+            realtimeEventSource.onmessage = (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    if (payload.type === 'update') {
+                        handleRemoteDataUpdate(payload.lastUpdated);
+                    }
+                } catch (e) {
+                    console.warn('Failed to parse realtime sync event:', e);
+                }
+            };
+            realtimeEventSource.onerror = () => {
+                console.warn('Realtime sync stream disconnected, using polling fallback');
+            };
+        } catch (e) {
+            console.warn('Realtime sync unavailable, using polling fallback:', e);
+        }
+    }
+
+    realtimePollTimer = setInterval(async () => {
+        try {
+            const versionRes = await fetch(`${API_BASE}/data/version`);
+            if (!versionRes.ok) return;
+            const version = await versionRes.json();
+            await handleRemoteDataUpdate(version.lastUpdated);
+        } catch (e) {
+            // Ignore polling errors when offline
+        }
+    }, 15000);
 }
 
 async function saveToBackend() {
@@ -1478,11 +1846,15 @@ async function saveToBackend() {
         const monsters = getCustomMonsters();
         const items = getCustomItems();
         const spells = getCustomSpells();
+        const overrideMonsters = getOverrideMonsters();
+        const overrideItems = getOverrideItems();
+        const overrideSpells = getOverrideSpells();
         const deleted = getDeletedItems();
         
         // Collect images from localStorage
         const images = {};
         const imagesData = {};
+        const entryImages = {};
         for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
             if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_'))) {
@@ -1492,13 +1864,29 @@ async function saveToBackend() {
             if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && key.endsWith('_data')) {
                 imagesData[key.replace('_data', '')] = localStorage.getItem(key);
             }
+            if (key && key.startsWith('dnd_extension_entry_images_')) {
+                const name = key.replace('dnd_extension_entry_images_', '');
+                try {
+                    entryImages[name] = JSON.parse(localStorage.getItem(key) || '[]');
+                } catch (e) { /* ignore */ }
+            }
         }
 
-        await fetch(`${API_BASE}/data`, {
+        const res = await fetch(`${API_BASE}/data`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ monsters, items, spells, deleted, images, imagesData })
+            body: JSON.stringify({
+                monsters, items, spells,
+                overrideMonsters, overrideItems, overrideSpells,
+                deleted, images, imagesData, entryImages,
+            })
         });
+        if (res.ok) {
+            const result = await res.json();
+            if (result.lastUpdated) {
+                setLastSyncedAt(result.lastUpdated);
+            }
+        }
     } catch (e) {
         // Silent fail
     }
@@ -1524,9 +1912,6 @@ function saveCustomMonster(monster) {
         return false;
     }
 }
-function getCustomItems() {
-    try { return JSON.parse(localStorage.getItem('dnd_extension_custom_items') || '[]'); } catch (e) { return []; }
-}
 function saveCustomItem(item) {
     try {
         const list = getCustomItems();
@@ -1546,10 +1931,6 @@ function saveCustomItem(item) {
         }
         return false;
     }
-}
-
-function getCustomSpells() {
-    try { return JSON.parse(localStorage.getItem('dnd_extension_custom_spells') || '[]'); } catch (e) { return []; }
 }
 
 function saveCustomSpell(spell) {
@@ -1575,16 +1956,9 @@ function saveCustomSpell(spell) {
 
 export function searchSpells(query) {
   const deleted = getDeletedItems();
-  const customs = getCustomSpells();
-  
-  // Merge built-in SPELL_DATA with custom spells
-  // SPELL_DATA is an object { name: details }, so we convert to array
+  const overrides = getOverrideSpells();
   const builtInSpells = Object.entries(SPELL_DATA).map(([name, data]) => ({ name, ...data }));
-  
-  // Filter out built-ins overridden by customs
-  const activeBuiltIns = builtInSpells.filter(s => !customs.some(c => c.name === s.name));
-  
-  const allSpells = activeBuiltIns.filter(s => !deleted.includes(s.name));
+  const allSpells = mergeSourceBookEntries(builtInSpells, overrides, deleted);
   
   if (!query) return allSpells.slice(0, 50);
   
@@ -1597,10 +1971,8 @@ export function searchSpells(query) {
 
 export function searchMonsters(query, searchNameOnly = false, minCrStr = '', maxCrStr = '') {
   const deleted = getDeletedItems();
-  const customs = getCustomMonsters();
-  // Filter out built-ins that are overridden by customs
-  const builtIns = monsters.filter(m => !customs.some(c => c.name === m.name));
-  const allMonsters = builtIns.filter(m => !deleted.includes(m.name));
+  const overrides = getOverrideMonsters();
+  const allMonsters = mergeSourceBookEntries(monsters, overrides, deleted);
 
   // Return everything (first 50) if no filters active
   if (!query && !minCrStr && !maxCrStr) return allMonsters.slice(0, 50);
@@ -1749,6 +2121,14 @@ async function ensureShortImageUrl(url, name = null, folder = null) {
     if (url.startsWith('{') || url.startsWith('%7B')) {
         console.warn("Invalid Image URL detected (JSON object). Discarding.");
         return null;
+    }
+
+    // Always try to remove background first!
+    try {
+        console.log('Removing background for stored/processed image...');
+        url = await processAndRemoveBackground(url);
+    } catch (bgError) {
+        console.warn('Background removal failed, using original:', bgError);
     }
 
     // Remove whitespace from Data URIs (newlines/spaces can break fetch/OBR)
@@ -2190,7 +2570,9 @@ export async function addMonsterToScene(monster) {
            }
        }
        
-       if (!imageUrl || (isPlaceholder && imageUrl.includes('Tm90IEZvdW5k'))) imageUrl = defaultIcon;
+       if (!imageUrl || (isPlaceholder && imageUrl.includes('Tm90IEZvdW5k'))) {
+           imageUrl = defaultIcon;
+       }
 
       // Resolve relative paths (e.g. from extracted images)
       if (imageUrl && !imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
@@ -2289,8 +2671,12 @@ export async function addMonsterToScene(monster) {
 
 
 // Helper: Process Image and Remove Background
-function processAndRemoveBackground(source) {
-    return new Promise((resolve, reject) => {
+async function processAndRemoveBackground(source) {
+  // PhotoRoom disabled for now (API key issues), using reliable local method!
+  console.log('Using local background removal method...');
+  
+  // Use local background removal method
+  return new Promise((resolve, reject) => {
         // Strategy: 0=Direct, 1=corsproxy.io, 2=allorigins.win
         const tryLoadImage = (url, attemptLevel = 0) => {
             const img = new Image();
@@ -2737,16 +3123,21 @@ function deleteItem(name) {
 }
 
 function deleteItemPermanently(name, type) {
-    // Delete from custom lists if present
     if (type === 'monster') {
         const customMonsters = getCustomMonsters().filter(m => m.name !== name);
+        const overrideMonsters = getOverrideMonsters().filter(m => m.name !== name);
         localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customMonsters));
+        localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(overrideMonsters));
     } else if (type === 'item') {
         const customItems = getCustomItems().filter(i => i.name !== name);
+        const overrideItems = getOverrideItems().filter(i => i.name !== name);
         localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customItems));
+        localStorage.setItem('dnd_extension_override_items', JSON.stringify(overrideItems));
     } else if (type === 'spell') {
         const customSpells = getCustomSpells().filter(s => s.name !== name);
+        const overrideSpells = getOverrideSpells().filter(s => s.name !== name);
         localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customSpells));
+        localStorage.setItem('dnd_extension_override_spells', JSON.stringify(overrideSpells));
     }
     
     // Remove from deleted items to restore built-in if applicable
@@ -2758,9 +3149,8 @@ function deleteItemPermanently(name, type) {
 
 export function searchItems(query) {
   const deleted = getDeletedItems();
-  const customs = getCustomItems();
-  const builtIns = items.filter(i => !customs.some(c => c.name === i.name));
-  const activeItems = builtIns.filter(i => !deleted.includes(i.name));
+  const overrides = getOverrideItems();
+  const activeItems = mergeSourceBookEntries(items, overrides, deleted);
 
   if (!query) return activeItems.slice(0, 50);
   const lowerQuery = query.toLowerCase();
@@ -3183,7 +3573,7 @@ export function searchItems(query) {
 
                       // If token is missing cr metadata, try to find it in monsters or custom monsters library
                       if (isMonster && (!cr || cr === "Unknown")) {
-                          const allMonsters = [...monsters, ...getCustomMonsters()];
+                          const allMonsters = [...monsters, ...getOverrideMonsters(), ...getCustomMonsters()];
                           const libraryMonster = allMonsters.find(m => m.name === name);
                           if (libraryMonster) {
                               cr = libraryMonster.cr;
@@ -3628,7 +4018,7 @@ export function searchItems(query) {
               cr: editorCr.value,
               type: editorType.value,
               description: editorDesc.value,
-              source: editorOriginalSource || "Custom",
+              source: editorOriginalSource || (isBuiltInMonster(editorOriginalName || name) ? monsters.find(m => m.name === (editorOriginalName || name))?.source : null) || "Custom",
               stats: lastParsedStatBlock?.stats || {},
               savingThrows: lastParsedStatBlock?.savingThrows,
               skills: lastParsedStatBlock?.skills,
@@ -3641,7 +4031,7 @@ export function searchItems(query) {
               // We only save it in the object if it's NOT a huge data URI, to prevent bloating the main list
               image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
           };
-          if (!saveCustomMonster(newMonster)) return;
+          if (!saveMonsterEntry(newMonster, { originalName: editorOriginalName })) return;
 
           // Sync Library -> Tokens: Update existing OBR tokens for this monster
           try {
@@ -3712,20 +4102,20 @@ export function searchItems(query) {
               level: parseInt(editorSpellLevel.value) || 0,
               school: editorSpellSchool.value,
               description: editorSpellDesc.value,
-              source: editorOriginalSource || "Custom",
+              source: editorOriginalSource || (isBuiltInSpell(editorOriginalName || name) ? SPELL_DATA[editorOriginalName || name]?.source : null) || "Custom",
               aoe: (aoeType && aoeSize) ? { type: aoeType, size: aoeSize } : undefined
           };
-          if (!saveCustomSpell(newSpell)) return;
+          if (!saveSpellEntry(newSpell, { originalName: editorOriginalName })) return;
       } else {
           const newItem = {
               name: name,
               type: editorItemType.value,
               rarity: editorRarity.value,
               description: editorItemDesc.value,
-              source: editorOriginalSource || "Custom",
+              source: editorOriginalSource || (isBuiltInItem(editorOriginalName || name) ? items.find(i => i.name === (editorOriginalName || name))?.source : null) || "Custom",
               image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
           };
-          if (!saveCustomItem(newItem)) return;
+          if (!saveItemEntry(newItem, { originalName: editorOriginalName })) return;
       }
       
       // Handle Rename of Custom Item (Cleanup old)
@@ -3744,8 +4134,15 @@ export function searchItems(query) {
                       localStorage.removeItem(oldImgKey);
                   }
               } else {
-                  // It was a built-in monster. Hide the original so it looks like a rename.
-                  if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
+                  const overrides = getOverrideMonsters();
+                  const overrideIdx = overrides.findIndex(m => m.name === editorOriginalName);
+                  if (overrideIdx !== -1) {
+                      if (confirm(`Do you want to remove your edits to "${editorOriginalName}"?`)) {
+                          overrides.splice(overrideIdx, 1);
+                          localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(overrides));
+                          saveToBackend();
+                      }
+                  } else if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
                       deleteItem(editorOriginalName);
                   }
               }
@@ -3753,18 +4150,23 @@ export function searchItems(query) {
               const customs = getCustomSpells();
               const oldIdx = customs.findIndex(s => s.name === editorOriginalName);
               if (oldIdx !== -1) {
-                  // It was a custom spell
                   if (confirm(`Do you want to delete the old entry "${editorOriginalName}"?`)) {
                       customs.splice(oldIdx, 1);
                       localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customs));
 
-                      // Cleanup old image
                       const oldImgKey = 'spell_image_' + editorOriginalName;
                       localStorage.removeItem(oldImgKey);
                   }
               } else {
-                  // Built-in spell
-                  if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
+                  const overrides = getOverrideSpells();
+                  const overrideIdx = overrides.findIndex(s => s.name === editorOriginalName);
+                  if (overrideIdx !== -1) {
+                      if (confirm(`Do you want to remove your edits to "${editorOriginalName}"?`)) {
+                          overrides.splice(overrideIdx, 1);
+                          localStorage.setItem('dnd_extension_override_spells', JSON.stringify(overrides));
+                          saveToBackend();
+                      }
+                  } else if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
                       deleteItem(editorOriginalName);
                   }
               }
@@ -3776,13 +4178,19 @@ export function searchItems(query) {
                       customs.splice(oldIdx, 1);
                       localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customs));
 
-                      // Cleanup old image
                       const oldImgKey = 'item_image_' + editorOriginalName;
                       localStorage.removeItem(oldImgKey);
                   }
               } else {
-                  // It was a built-in item. Hide the original so it looks like a rename.
-                  if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
+                  const overrides = getOverrideItems();
+                  const overrideIdx = overrides.findIndex(i => i.name === editorOriginalName);
+                  if (overrideIdx !== -1) {
+                      if (confirm(`Do you want to remove your edits to "${editorOriginalName}"?`)) {
+                          overrides.splice(overrideIdx, 1);
+                          localStorage.setItem('dnd_extension_override_items', JSON.stringify(overrides));
+                          saveToBackend();
+                      }
+                  } else if (confirm(`Do you want to hide the original entry "${editorOriginalName}"?`)) {
                       deleteItem(editorOriginalName);
                   }
               }
@@ -3902,20 +4310,22 @@ export function searchItems(query) {
       pdfExtractedItems.style.display = 'none';
       
       try {
-        const text = await extractTextFromPDF(file);
-        
         let extractedMonsters = [];
         let extractedItems = [];
         
-        // Always use AI extraction first, fall back to basic if AI fails
+        // Use local extraction directly!
+        const text = await extractTextFromPDF(file);
+        
+        let localMonsters = [];
+        let localItems = [];
+        
         try {
           pdfUploadStatus.textContent = 'Extracting with AI...';
           const aiResult = await extractWithAI(text);
-          extractedMonsters = aiResult.monsters || [];
-          extractedItems = aiResult.items || [];
+          localMonsters = aiResult.monsters || [];
+          localItems = aiResult.items || [];
           
-          // Format monsters to match existing structure
-          extractedMonsters = extractedMonsters.map(m => ({
+          localMonsters = localMonsters.map(m => ({
             rawText: m.rawText,
             parsed: {
               name: m.name,
@@ -3926,8 +4336,7 @@ export function searchItems(query) {
             }
           }));
           
-          // Format items to match existing structure
-          extractedItems = extractedItems.map(i => ({
+          localItems = localItems.map(i => ({
             rawText: i.rawText,
             parsed: {
               name: i.name,
@@ -3939,9 +4348,12 @@ export function searchItems(query) {
         } catch (aiError) {
           console.warn('AI extraction failed, using basic extraction:', aiError);
           pdfUploadStatus.textContent = 'AI extraction failed, using basic extraction...';
-          extractedMonsters = extractMonstersFromPDFText(text);
-          extractedItems = extractItemsFromPDFText(text);
+          localMonsters = extractMonstersFromPDFText(text);
+          localItems = extractItemsFromPDFText(text);
         }
+        
+        extractedMonsters = localMonsters;
+        extractedItems = localItems;
         
         if (extractedMonsters.length === 0 && extractedItems.length === 0) {
           pdfUploadStatus.style.color = '#ff6b6b';
@@ -4093,12 +4505,8 @@ export function searchItems(query) {
           // 1. Prepare Monsters
           const deleted = getDeletedItems();
           const customs = getCustomMonsters();
-          // Remove deleted from built-ins
-          const activeBuiltIns = monsters.filter(m => !deleted.includes(m.name));
-          // Remove built-ins that are overridden by customs (same name)
-          const nonOverriddenBuiltIns = activeBuiltIns.filter(m => !customs.some(c => c.name === m.name));
-          // Merge
-          const finalMonsters = [...nonOverriddenBuiltIns, ...customs].map(m => {
+          const overrides = getOverrideMonsters();
+          const finalMonsters = [...mergeSourceBookEntries(monsters, overrides, deleted), ...customs].map(m => {
              // Check for custom image
              const customImg = localStorage.getItem(`monster_image_${m.name}`);
              if (customImg) {
@@ -4112,9 +4520,8 @@ export function searchItems(query) {
 
           // 2. Prepare Items
           const customItems = getCustomItems();
-          const activeBuiltInItems = items.filter(i => !deleted.includes(i.name));
-          const nonOverriddenItems = activeBuiltInItems.filter(i => !customItems.some(c => c.name === i.name));
-          const finalItems = [...nonOverriddenItems, ...customItems].map(i => {
+          const itemOverrides = getOverrideItems();
+          const finalItems = [...mergeSourceBookEntries(items, itemOverrides, deleted), ...customItems].map(i => {
               const customImg = localStorage.getItem(`item_image_${i.name}`);
               if (customImg) {
                   return { ...i, image: customImg };
@@ -4299,9 +4706,10 @@ export function searchItems(query) {
   if (randomBtn) {
       randomBtn.addEventListener('click', () => {
           const deleted = getDeletedItems();
-          const customs = getCustomItems();
-          const builtIns = items.filter(i => !customs.some(c => c.name === i.name));
-          const allItems = [...customs, ...builtIns].filter(i => !deleted.includes(i.name));
+          const allItems = [
+              ...mergeSourceBookEntries(items, getOverrideItems(), deleted),
+              ...getCustomItems().filter(i => !deleted.includes(i.name)),
+          ];
 
           if (allItems && allItems.length > 0) {
               const randomItem = allItems[Math.floor(Math.random() * allItems.length)];
@@ -4508,6 +4916,14 @@ export function searchItems(query) {
             throw new Error("Invalid image URL. It looks like you pasted a raw JSON object. Please try extracting just the URL or use 'Select from Library'.");
           }
           
+          // Always try to remove background when saving/applying a new image!
+          try {
+            console.log('Removing background before saving/applying image...');
+            imgSrc = await processAndRemoveBackground(imgSrc);
+          } catch (bgError) {
+            console.warn('Background removal failed, using original:', bgError);
+          }
+          
           try {
             localStorage.setItem(`monster_image_${entryName}`, imgSrc);
             addUsedImageForEntry(entryName, imgSrc);
@@ -4658,42 +5074,19 @@ export function searchItems(query) {
     let descriptionToUse = data.description;
     
     if (isSpell) {
-        const customSpells = getCustomSpells();
-        libraryData = customSpells.find(s => s.name === data.name);
-        
-        if (!libraryData && typeof SPELL_DATA !== 'undefined') {
-            libraryData = SPELL_DATA[data.name];
-            if (libraryData) libraryData.name = data.name; // Ensure name is present
-        }
-        
+        libraryData = getSpellByName(data.name);
         if (libraryData) {
             descriptionToUse = libraryData.description;
             data = { ...data, ...libraryData };
         }
     } else if (isItem) {
-        // Check custom items first
-        const customItems = getCustomItems();
-        libraryData = customItems.find(i => i.name === data.name);
-        
-        // Fallback to built-in items
-        if (!libraryData) {
-            libraryData = items.find(i => i.name === data.name);
-        }
-
+        libraryData = getItemByName(data.name);
         if (libraryData) {
             descriptionToUse = libraryData.description;
-            data = { ...data, ...libraryData }; // Merge to get flavor/details
+            data = { ...data, ...libraryData };
         }
     } else {
-        // Check custom monsters first
-        const customMonsters = getCustomMonsters();
-        libraryData = customMonsters.find(m => m.name === data.name);
-        
-        // Fallback to built-in monsters
-        if (!libraryData) {
-             libraryData = monsters.find(m => m.name === data.name);
-        }
-
+        libraryData = getMonsterByName(data.name);
         if (libraryData) {
             descriptionToUse = libraryData.description;
             data = { ...data, ...libraryData };
@@ -5013,66 +5406,11 @@ export function searchItems(query) {
         let saved = false;
         
         if (isMonster) {
-          const customMonsters = getCustomMonsters();
-          let idx = customMonsters.findIndex(m => m.name === data.name);
-          
-          if (idx === -1) {
-            // Create custom monster if not exists
-            customMonsters.push({
-              ...data,
-              description: newDesc,
-              source: 'Custom'
-            });
-            saved = true;
-          } else {
-            customMonsters[idx].description = newDesc;
-            saved = true;
-          }
-          
-          if (saved) {
-            localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customMonsters));
-            saveToBackend();
-          }
+          saved = saveMonsterEntry({ ...data, description: newDesc }, { originalName: data.name });
         } else if (isItem) {
-          const customItems = getCustomItems();
-          let idx = customItems.findIndex(i => i.name === data.name);
-          
-          if (idx === -1) {
-            customItems.push({
-              ...data,
-              description: newDesc,
-              source: 'Custom'
-            });
-            saved = true;
-          } else {
-            customItems[idx].description = newDesc;
-            saved = true;
-          }
-          
-          if (saved) {
-            localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customItems));
-            saveToBackend();
-          }
+          saved = saveItemEntry({ ...data, description: newDesc }, { originalName: data.name });
         } else if (isSpell) {
-          const customSpells = getCustomSpells();
-          let idx = customSpells.findIndex(s => s.name === data.name);
-          
-          if (idx === -1) {
-            customSpells.push({
-              ...data,
-              description: newDesc,
-              source: 'Custom'
-            });
-            saved = true;
-          } else {
-            customSpells[idx].description = newDesc;
-            saved = true;
-          }
-          
-          if (saved) {
-            localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customSpells));
-            saveToBackend();
-          }
+          saved = saveSpellEntry({ ...data, description: newDesc }, { originalName: data.name });
         }
         
         if (saved) {
@@ -5111,14 +5449,24 @@ export function searchItems(query) {
           let updated = false;
           const changes = [];
           
+          const overrides = getOverrideMonsters();
           const customs = getCustomMonsters();
-          const idx = customs.findIndex(m => m.name === data.name);
-          if (idx === -1) {
-            alert("This is a built-in monster, not a custom one. Edit it to refresh stats!");
-            return;
+          let idx = overrides.findIndex(m => m.name === data.name);
+          let monster = idx !== -1 ? overrides[idx] : null;
+          if (!monster) {
+            idx = customs.findIndex(m => m.name === data.name);
+            monster = idx !== -1 ? customs[idx] : null;
           }
-          
-          const monster = customs[idx];
+          if (!monster) {
+            const builtIn = monsters.find(m => m.name === data.name);
+            if (!builtIn) {
+              alert("Could not find monster data to refresh.");
+              return;
+            }
+            monster = { ...builtIn };
+            overrides.push(monster);
+            idx = overrides.length - 1;
+          }
           console.log("Current monster stats:", { hp: monster.hp, ac: monster.ac, cr: monster.cr, type: monster.type });
           
           if (parsed.hp !== undefined && parsed.hp !== monster.hp) {
@@ -5145,8 +5493,7 @@ export function searchItems(query) {
           console.log("Changes detected:", changes);
           
           if (updated) {
-            localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customs));
-            saveToBackend();
+            saveMonsterEntry(monster, { originalName: data.name });
             
             // Update existing tokens on the map, just like when saving an edited monster
             try {
@@ -5205,7 +5552,7 @@ export function searchItems(query) {
             alert(`Stats refreshed for ${data.name}!\n\nChanges:\n${changes.join('\n')}`);
             // Re-render the stats view to show updated data
             const itemIdForRefresh = itemId; // Capture itemId from outer scope
-            const updatedData = customs[idx]; // Get the updated monster object
+            const updatedData = getMonsterByName(data.name);
             showStats(updatedData, itemIdForRefresh);
           } else {
             alert("No changes detected—stats are already up to date!\n\nCheck console logs for debugging info.");
@@ -5980,11 +6327,10 @@ export function searchItems(query) {
             return;
         }
         
-        const customSpells = getCustomSpells();
-        const customNames = customSpells.map(s => s.name);
+        const overrideNames = getOverrideSpells().map(s => s.name);
+        const customNames = getCustomSpells().map(s => s.name);
         const builtInNames = Object.keys(SPELL_DATA);
-        // Combine and dedup (custom overrides built-in)
-        const allNames = [...new Set([...customNames, ...builtInNames])];
+        const allNames = [...new Set([...overrideNames, ...customNames, ...builtInNames])];
         
         const matches = allNames.filter(k => k.toLowerCase().includes(val)).slice(0, 20); // Limit results
         if (matches.length === 0) {
@@ -6177,10 +6523,10 @@ export function searchItems(query) {
                     ...data, 
                     hp: newHp, 
                     ac: newAc,
-                    source: data.source || "Custom" 
+                    source: data.source || getMonsterByName(data.name)?.source || "Custom" 
                 };
                 
-                saveCustomMonster(updatedMonster);
+                saveMonsterEntry(updatedMonster, { originalName: data.name });
 
                 if (btn) {
                     const originalText = btn.innerText;
@@ -6214,8 +6560,7 @@ export function searchItems(query) {
                     if (items.length > 0) {
                         const currentItem = items[0];
                         const monsterName = currentItem.metadata.name;
-                        const original = monsters.find(m => m.name === monsterName) || 
-                                         getCustomMonsters().find(m => m.name === monsterName);
+                        const original = getMonsterByName(monsterName);
                         if (original) {
                             const defaultHp = parseStat(original.hp);
                             hpInput.value = defaultHp;
@@ -6235,8 +6580,7 @@ export function searchItems(query) {
                     if (items.length > 0) {
                         const currentItem = items[0];
                         const monsterName = currentItem.metadata.name;
-                        const original = monsters.find(m => m.name === monsterName) || 
-                                         getCustomMonsters().find(m => m.name === monsterName);
+                        const original = getMonsterByName(monsterName);
                         if (original) {
                             const defaultAc = parseStat(original.ac);
                             acInput.value = defaultAc;
@@ -6561,6 +6905,13 @@ export function searchItems(query) {
     });
   };
 
+  onSyncUIRefresh = () => {
+    const searchView = document.getElementById('search-view');
+    if (searchView && searchView.style.display !== 'none') {
+      renderResults(input.value);
+    }
+  };
+
   input.addEventListener('input', (e) => renderResults(e.target.value));
   if (searchNameOnlyCheckbox) searchNameOnlyCheckbox.addEventListener('change', () => renderResults(input.value));
   if (minCrInput) minCrInput.addEventListener('input', () => renderResults(input.value));
@@ -6815,11 +7166,13 @@ if (window.self === window.top) {
     }
   };
   
+  syncWithBackend().then(() => startRealtimeSync());
   setup();
 } else {
   // Production/Extension mode
   OBR.onReady(async () => {
     await syncWithBackend();
+    startRealtimeSync();
     const searchParams = new URLSearchParams(window.location.search);
     if (searchParams.get('mode') === 'popover') {
         // We are inside the popover UI

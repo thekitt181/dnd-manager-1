@@ -9,6 +9,10 @@ import { fileURLToPath } from 'url';
 import http from 'http';
 import https from 'https';
 import axios from 'axios';
+import FormData from 'form-data';
+import multer from 'multer';
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +30,17 @@ app.use(express.static(distPath));
 // MongoDB Setup
 const mongoUri = process.env.MONGODB_URI;
 let dbCollection = null;
+const sseClients = new Set();
+
+function broadcastDataUpdate(lastUpdated) {
+    const payload = JSON.stringify({
+        type: 'update',
+        lastUpdated: lastUpdated ? new Date(lastUpdated).toISOString() : null,
+    });
+    for (const client of sseClients) {
+        client.write(`data: ${payload}\n\n`);
+    }
+}
 
 if (mongoUri) {
     const client = new MongoClient(mongoUri, {
@@ -37,6 +52,21 @@ if (mongoUri) {
             console.log('Connected to MongoDB');
             const db = client.db('owlbear-extension');
             dbCollection = db.collection('data');
+
+            const changeStream = dbCollection.watch(
+                [{ $match: { 'documentKey._id': 'global' } }],
+                { fullDocument: 'updateLookup' }
+            );
+
+            changeStream.on('change', (change) => {
+                const lastUpdated = change.fullDocument?.lastUpdated || new Date();
+                console.log('MongoDB data changed, broadcasting to clients');
+                broadcastDataUpdate(lastUpdated);
+            });
+
+            changeStream.on('error', (err) => {
+                console.error('MongoDB change stream error:', err);
+            });
         })
         .catch(err => {
             console.error('MongoDB connection error:', err);
@@ -51,7 +81,11 @@ const DATA_FILE = path.join(__dirname, 'data.json');
 async function getData() {
     if (dbCollection) {
         const data = await dbCollection.findOne({ _id: 'global' });
-        return data || { monsters: [], items: [], deleted: [] };
+        return data || {
+            monsters: [], items: [], spells: [],
+            overrideMonsters: [], overrideItems: [], overrideSpells: [],
+            deleted: [], images: {}, imagesData: {}, entryImages: {},
+        };
     } else {
         if (fs.existsSync(DATA_FILE)) {
             return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -62,15 +96,18 @@ async function getData() {
 
 // Helper to save data
 async function saveData(data) {
+    const payload = { ...data, lastUpdated: new Date() };
     if (dbCollection) {
         await dbCollection.updateOne(
             { _id: 'global' },
-            { $set: data },
+            { $set: payload },
             { upsert: true }
         );
     } else {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+        fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2));
     }
+    broadcastDataUpdate(payload.lastUpdated);
+    return payload;
 }
 
 // API Endpoints
@@ -87,16 +124,81 @@ app.get('/api/data', async (req, res) => {
     }
 });
 
+app.get('/api/data/version', async (req, res) => {
+    try {
+        if (dbCollection) {
+            const doc = await dbCollection.findOne(
+                { _id: 'global' },
+                { projection: { lastUpdated: 1 } }
+            );
+            return res.json({
+                lastUpdated: doc?.lastUpdated ? new Date(doc.lastUpdated).toISOString() : null,
+                storage: 'mongodb',
+            });
+        }
+
+        if (fs.existsSync(DATA_FILE)) {
+            const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            return res.json({
+                lastUpdated: data.lastUpdated ? new Date(data.lastUpdated).toISOString() : null,
+                storage: 'local',
+            });
+        }
+
+        res.json({ lastUpdated: null, storage: 'local' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/data/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    sseClients.add(res);
+    res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+
+    const heartbeat = setInterval(() => {
+        res.write(': heartbeat\n\n');
+    }, 30000);
+
+    req.on('close', () => {
+        clearInterval(heartbeat);
+        sseClients.delete(res);
+    });
+});
+
 app.post('/api/data', async (req, res) => {
     try {
-        const { monsters, items, deleted, images, imagesData } = req.body;
+        const {
+            monsters, items, spells,
+            overrideMonsters, overrideItems, overrideSpells,
+            deleted, images, imagesData, entryImages,
+        } = req.body;
         // Validate basic structure
         if (!Array.isArray(monsters) || !Array.isArray(items)) {
             return res.status(400).json({ error: 'Invalid data format' });
         }
         
-        await saveData({ monsters, items, deleted: deleted || [], images: images || {}, imagesData: imagesData || {}, lastUpdated: new Date() });
-        res.json({ success: true });
+        const saved = await saveData({
+            monsters,
+            items,
+            spells: Array.isArray(spells) ? spells : [],
+            overrideMonsters: Array.isArray(overrideMonsters) ? overrideMonsters : [],
+            overrideItems: Array.isArray(overrideItems) ? overrideItems : [],
+            overrideSpells: Array.isArray(overrideSpells) ? overrideSpells : [],
+            deleted: deleted || [],
+            images: images || {},
+            imagesData: imagesData || {},
+            entryImages: entryImages || {},
+        });
+        res.json({
+            success: true,
+            lastUpdated: saved.lastUpdated ? new Date(saved.lastUpdated).toISOString() : null,
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -224,6 +326,114 @@ app.post('/api/proxy', async (req, res) => {
             res.status(500).json({ error: 'Proxy request failed', details: e.message });
         }
     }
+});
+
+// PhotoRoom Background Removal API
+app.post('/api/remove-background', upload.single('image'), async (req, res) => {
+  console.log('=== PhotoRoom Request Received ===');
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('File info:', req.file ? { 
+    originalname: req.file.originalname, 
+    mimetype: req.file.mimetype, 
+    size: req.file.size 
+  } : 'NO FILE!');
+
+  try {
+    if (!req.file) {
+      console.error('No image file provided');
+      return res.status(400).json({ error: 'No image file provided.' });
+    }
+
+    console.log('Calling PhotoRoom API...');
+
+    const form = new FormData();
+    form.append('image_file', req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype || 'image/png',
+    });
+
+    console.log('Form data prepared, sending to PhotoRoom...');
+    const response = await axios.post(
+      'https://sdk.photoroom.com/v1/segment',
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          'x-api-key': 'sk_pr_default_c4f0cde55db80941f4b37d3d61d99cc851ba151f'
+        },
+        responseType: 'arraybuffer',
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+        timeout: 120000, // 2 min timeout
+      }
+    );
+
+    console.log('PhotoRoom response status:', response.status);
+    console.log('PhotoRoom response headers:', response.headers);
+
+    res.set('Content-Type', 'image/png');
+    res.send(response.data);
+  } catch (err) {
+    console.error('=== PhotoRoom Error ===');
+    console.error('Error message:', err.message);
+    if (err.response) {
+      console.error('Response status:', err.response.status);
+      console.error('Response status text:', err.response.statusText);
+      console.error('Response headers:', err.response.headers);
+      if (err.response.data) {
+        try {
+          // Try to parse as text first
+          console.error('Response data:', err.response.data.toString());
+        } catch (e) {
+          console.error('Response data (raw):', err.response.data);
+        }
+      }
+    } else if (err.request) {
+      console.error('No response received from PhotoRoom');
+    }
+    res.status(500).json({ 
+      error: 'Background removal failed', 
+      message: err.message,
+      status: err.response?.status,
+      statusText: err.response?.statusText
+    });
+  }
+});
+
+// D&D PDF Extraction using base44.app API (disabled for now)
+app.post('/api/extract-dnd-pdf', upload.single('pdf'), async (req, res) => {
+  try {
+    let pdfBase64;
+    let filename;
+
+    if (req.file) {
+      pdfBase64 = req.file.buffer.toString('base64');
+      filename = req.file.originalname;
+    } else if (req.body && req.body.pdf_base64) {
+      pdfBase64 = req.body.pdf_base64;
+      filename = req.body.filename || 'unknown.pdf';
+    } else {
+      return res.status(400).json({ error: 'No PDF file provided.' });
+    }
+
+    console.log('Calling base44.app with base64 (fallback)...');
+
+    const response = await axios.post(
+      'https://6a121fa69e999d7758780e21.base44.app/functions/extractDndPdf',
+      { pdf_base64: pdfBase64 },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+        timeout: 120000, // 2 min timeout for large PDFs
+      }
+    );
+
+    res.json(response.data);
+  } catch (err) {
+    console.error('DnD PDF extraction error:', err?.response?.data || err.message);
+    res.status(500).json({ error: err?.response?.data?.error || err.message });
+  }
 });
 
 // Serve persisted images from DB or fallback
