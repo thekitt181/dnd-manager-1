@@ -1239,6 +1239,7 @@ function saveExtractedMonstersToGlobal(monsters) {
     
     const all = [...existing, ...newMonsters];
     localStorage.setItem('dnd_extension_extracted_monsters', JSON.stringify(all));
+    saveToBackend();
     return newMonsters.length;
   } catch (e) {
     console.error('Failed to save extracted monsters:', e);
@@ -1406,10 +1407,19 @@ function saveExtractedItemsToGlobal(items) {
     
     const all = [...existing, ...newItems];
     localStorage.setItem('dnd_extension_extracted_items', JSON.stringify(all));
+    saveToBackend();
     return newItems.length;
   } catch (e) {
     console.error('Failed to save extracted items:', e);
     return 0;
+  }
+}
+
+function getExtractedItemsFromGlobal() {
+  try {
+    return JSON.parse(localStorage.getItem('dnd_extension_extracted_items') || '[]');
+  } catch (e) {
+    return [];
   }
 }
 
@@ -1783,13 +1793,24 @@ function getEntryImageKey(type, name) {
 
 function attachImageToEntry(entry, type) {
     if (!entry?.name) return entry;
-    const img = localStorage.getItem(getEntryImageKey(type, entry.name));
+    const key = getEntryImageKey(type, entry.name);
+    const lsImg = validateStoredImageValue(localStorage.getItem(key));
+    const entryImg = entry.image && typeof entry.image === 'string' ? entry.image : null;
+    const img = lsImg || entryImg;
     if (img) return { ...entry, image: img };
     return entry;
 }
 
 function attachImagesToEntries(entries, type) {
     return entries.map((entry) => attachImageToEntry(entry, type));
+}
+
+function collectImageReferencesFromEntries(entries, type, images) {
+    for (const entry of entries || []) {
+        if (!entry?.name || !entry.image || typeof entry.image !== 'string') continue;
+        const key = getEntryImageKey(type, entry.name);
+        if (!images[key]) images[key] = entry.image;
+    }
 }
 
 function buildFullMonsterEntry(updates, { originalName = null, bookKey = null } = {}) {
@@ -1832,8 +1853,15 @@ function buildFullSpellEntry(updates, { originalName = null, bookKey = null } = 
 }
 
 function syncEntryImageToLibrary(entryName, imgSrc, type) {
-    localStorage.setItem(getEntryImageKey(type, entryName), imgSrc);
-    addUsedImageForEntry(entryName, imgSrc);
+    const key = getEntryImageKey(type, entryName);
+    let storedUrl = imgSrc;
+    if (imgSrc && !imgSrc.startsWith('data:')) {
+        try {
+            storedUrl = new URL(imgSrc, window.location.href).href;
+        } catch (e) { /* keep original */ }
+    }
+    rememberImageUrlReference(key, storedUrl);
+    addUsedImageForEntry(entryName, storedUrl);
     const builders = {
         monster: buildFullMonsterEntry,
         item: buildFullItemEntry,
@@ -2097,6 +2125,61 @@ function restoreItem(name) {
 }
 // Backend Sync Logic
 const API_BASE = '/api';
+
+async function storeImageOnServer(key, imageData) {
+    const res = await fetch(`${API_BASE}/store-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, imageData }),
+    });
+    if (!res.ok) {
+        let details = res.statusText;
+        try {
+            const errBody = await res.json();
+            details = errBody.error || details;
+        } catch (e) { /* ignore */ }
+        throw new Error(details);
+    }
+    return res.json();
+}
+
+async function deleteImageFromServer(key) {
+    const res = await fetch(`${API_BASE}/store-image?key=${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+    });
+    if (!res.ok) {
+        let details = res.statusText;
+        try {
+            const errBody = await res.json();
+            details = errBody.error || details;
+        } catch (e) { /* ignore */ }
+        throw new Error(details);
+    }
+    return res.json();
+}
+
+function purgeLocalImageDataBlobs() {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && /^(monster|item|spell)_image_.*_data$/.test(key)) {
+            keysToRemove.push(key);
+        }
+    }
+    for (const key of keysToRemove) {
+        localStorage.removeItem(key);
+    }
+    return keysToRemove.length;
+}
+
+function rememberImageUrlReference(key, absoluteUrl) {
+    try {
+        localStorage.setItem(key, absoluteUrl);
+        localStorage.removeItem(`${key}_data`);
+    } catch (e) {
+        console.warn('Failed to store image URL reference locally:', e);
+    }
+}
 const LAST_SYNCED_KEY = 'dnd_extension_last_synced';
 let realtimeSyncStarted = false;
 let realtimeEventSource = null;
@@ -2251,18 +2334,10 @@ function applyRemoteSyncData(data) {
 
     if (remoteImages && typeof remoteImages === 'object') {
         for (const [key, val] of Object.entries(remoteImages)) {
+            if (key.endsWith('_data')) continue;
             if (localStorage.getItem(key) !== val) {
                 localStorage.setItem(key, val);
-                changed = true;
-            }
-        }
-    }
-
-    if (data.imagesData && typeof data.imagesData === 'object') {
-        for (const [key, val] of Object.entries(data.imagesData)) {
-            const dataKey = `${key}_data`;
-            if (localStorage.getItem(dataKey) !== val) {
-                localStorage.setItem(dataKey, val);
+                localStorage.removeItem(`${key}_data`);
                 changed = true;
             }
         }
@@ -2277,6 +2352,13 @@ function applyRemoteSyncData(data) {
                 changed = true;
             }
         }
+    }
+
+    if (Array.isArray(data.extractedMonsters)) {
+        replaceStorage('dnd_extension_extracted_monsters', data.extractedMonsters);
+    }
+    if (Array.isArray(data.extractedItems)) {
+        replaceStorage('dnd_extension_extracted_items', data.extractedItems);
     }
 
     reconcileCustomAndOverrides({ save: false });
@@ -2382,15 +2464,11 @@ function collectBackendPayload() {
     const deleted = snapshot.deleted;
 
     const images = {};
-    const imagesData = {};
     const entryImages = {};
     for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_'))) {
+        if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && !key.endsWith('_data')) {
             images[key] = localStorage.getItem(key);
-        }
-        if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && key.endsWith('_data')) {
-            imagesData[key.replace('_data', '')] = localStorage.getItem(key);
         }
         if (key && key.startsWith('dnd_extension_entry_images_')) {
             const name = key.replace('dnd_extension_entry_images_', '');
@@ -2400,14 +2478,32 @@ function collectBackendPayload() {
         }
     }
 
+    const enrichedMonsters = attachImagesToEntries(monsters, 'monster');
+    const enrichedItems = attachImagesToEntries(items, 'item');
+    const enrichedSpells = attachImagesToEntries(spells, 'spell');
+    const enrichedOverrideMonsters = attachImagesToEntries(overrideMonsters, 'monster');
+    const enrichedOverrideItems = attachImagesToEntries(overrideItems, 'item');
+    const enrichedOverrideSpells = attachImagesToEntries(overrideSpells, 'spell');
+
+    collectImageReferencesFromEntries(enrichedMonsters, 'monster', images);
+    collectImageReferencesFromEntries(enrichedItems, 'item', images);
+    collectImageReferencesFromEntries(enrichedSpells, 'spell', images);
+    collectImageReferencesFromEntries(enrichedOverrideMonsters, 'monster', images);
+    collectImageReferencesFromEntries(enrichedOverrideItems, 'item', images);
+    collectImageReferencesFromEntries(enrichedOverrideSpells, 'spell', images);
+
     return {
-        monsters: attachImagesToEntries(monsters, 'monster'),
-        items: attachImagesToEntries(items, 'item'),
-        spells: attachImagesToEntries(spells, 'spell'),
-        overrideMonsters: attachImagesToEntries(overrideMonsters, 'monster'),
-        overrideItems: attachImagesToEntries(overrideItems, 'item'),
-        overrideSpells: attachImagesToEntries(overrideSpells, 'spell'),
-        deleted, images, imagesData, entryImages,
+        monsters: enrichedMonsters,
+        items: enrichedItems,
+        spells: enrichedSpells,
+        overrideMonsters: enrichedOverrideMonsters,
+        overrideItems: enrichedOverrideItems,
+        overrideSpells: enrichedOverrideSpells,
+        deleted,
+        images,
+        entryImages,
+        extractedMonsters: getExtractedMonstersFromGlobal(),
+        extractedItems: getExtractedItemsFromGlobal(),
     };
 }
 
@@ -2673,9 +2769,9 @@ function resolveImageSrcForLoading(src) {
 function getStoredImage(mode, name) {
     const prefix = mode === 'monster' ? 'monster_image_' : (mode === 'spell' ? 'spell_image_' : 'item_image_');
     const lookup = (baseKey) => {
-        const dataUri = validateStoredImageValue(localStorage.getItem(`${baseKey}_data`));
-        if (dataUri) return dataUri;
-        return validateStoredImageValue(localStorage.getItem(baseKey));
+        const urlRef = validateStoredImageValue(localStorage.getItem(baseKey));
+        if (urlRef) return urlRef;
+        return validateStoredImageValue(localStorage.getItem(`${baseKey}_data`));
     };
 
     let val = lookup(prefix + name);
@@ -2761,21 +2857,37 @@ async function ensureShortImageUrl(url, name = null, folder = null) {
         }
     }
 
-    // If it's a Data URI, persist the raw data locally and use a stable, short server URL.
-    // This avoids relying on ephemeral filesystem storage on hosts that restart.
+    // If it's a Data URI, upload to MongoDB and use a stable short server URL.
     if (url.startsWith('data:image')) {
-        // Determine storage key based on folder/name
         const prefix = folder === 'items' ? 'item_image_' : (folder === 'spells' ? 'spell_image_' : 'monster_image_');
         const key = `${prefix}${name}`;
-        try {
-            localStorage.setItem(`${key}_data`, url);
-        } catch (e) {
-            console.warn("Failed to store image data locally:", e);
-        }
-        // Return a short, stable URL that the server will serve from DB
         const staticUrl = `/api/static-image?key=${encodeURIComponent(key)}`;
         const absoluteUrl = new URL(staticUrl, window.location.href).href;
-        return absoluteUrl;
+
+        try {
+            const result = await storeImageOnServer(key, url);
+            rememberImageUrlReference(key, absoluteUrl);
+            if (result.lastUpdated) {
+                const incoming = new Date(result.lastUpdated).getTime();
+                const current = getLastSyncedAt() ? new Date(getLastSyncedAt()).getTime() : 0;
+                if (incoming >= current) {
+                    setLastSyncedAt(result.lastUpdated);
+                }
+            }
+            saveToBackend();
+            return absoluteUrl;
+        } catch (e) {
+            console.warn('Failed to store image on server:', e);
+            rememberImageUrlReference(key, absoluteUrl);
+            if (url.length < 50000) {
+                try {
+                    localStorage.setItem(`${key}_data`, url);
+                } catch (lsErr) {
+                    console.warn('Failed to store image data locally:', lsErr);
+                }
+            }
+            return absoluteUrl;
+        }
     }
     return url;
 }
@@ -4705,21 +4817,22 @@ export function searchItems(query) {
           }
 
           try {
-              localStorage.setItem(imgKey, newImgUrl);
-              addUsedImageForEntry(name, newImgUrl);
-              // Verify immediately
-              const saved = localStorage.getItem(imgKey);
-              if (!saved || saved !== newImgUrl) {
-                 throw new Error("Verification failed: Saved value does not match.");
-              }
+              const absoluteUrl = newImgUrl.startsWith('data:')
+                  ? newImgUrl
+                  : new URL(newImgUrl, window.location.href).href;
+              rememberImageUrlReference(imgKey, absoluteUrl);
+              addUsedImageForEntry(name, absoluteUrl);
               imageSaved = true;
           } catch (e) {
-              console.error("Storage limit reached or save failed:", e);
-              alert("❌ IMAGE NOT SAVED!\n\nLocal storage is full. The text data will be saved, but the image is too large.\n\nTip: Use 'npm start' to enable the local server for unlimited image storage, or use smaller images.");
+              console.error("Failed to save image reference locally:", e);
+              alert("❌ IMAGE REFERENCE NOT SAVED LOCALLY!\n\nThe image was uploaded to MongoDB, but this browser could not cache the URL reference.");
           }
       } else {
-          // If the URL is cleared, remove the image from storage
           localStorage.removeItem(imgKey);
+          localStorage.removeItem(`${imgKey}_data`);
+          deleteImageFromServer(imgKey).catch((e) => {
+              console.warn('Failed to delete image from MongoDB:', e);
+          });
       }
 
       const saveEntryType = editorMode === 'monster' ? 'monster' : editorMode === 'spell' ? 'spell' : 'item';
@@ -4742,7 +4855,7 @@ export function searchItems(query) {
               damageResistances: lastParsedStatBlock?.damageResistances,
               damageImmunities: lastParsedStatBlock?.damageImmunities,
               conditionImmunities: lastParsedStatBlock?.conditionImmunities,
-              image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
+              image: newImgUrl || undefined
           }, { originalName: editorOriginalName, bookKey: saveBookKey });
           if (!saveMonsterEntry(newMonster, { originalName: editorOriginalName, bookKey: saveBookKey })) return;
 
@@ -4821,7 +4934,8 @@ export function searchItems(query) {
               school: editorSpellSchool.value,
               description: editorSpellDesc.value,
               source: getBuiltInSource('spell', saveBookKey || editorOriginalName || name) || editorOriginalSource || "Custom",
-              aoe: (aoeType && aoeSize) ? { type: aoeType, size: aoeSize } : undefined
+              aoe: (aoeType && aoeSize) ? { type: aoeType, size: aoeSize } : undefined,
+              image: newImgUrl || undefined
           }, { originalName: editorOriginalName, bookKey: saveBookKey });
           if (!saveSpellEntry(newSpell, { originalName: editorOriginalName, bookKey: saveBookKey })) return;
       } else {
@@ -4831,7 +4945,7 @@ export function searchItems(query) {
               rarity: editorRarity.value,
               description: editorItemDesc.value,
               source: getBuiltInSource('item', saveBookKey || editorOriginalName || name) || editorOriginalSource || "Custom",
-              image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
+              image: newImgUrl || undefined
           }, { originalName: editorOriginalName, bookKey: saveBookKey });
           if (!saveItemEntry(newItem, { originalName: editorOriginalName, bookKey: saveBookKey })) return;
       }
@@ -7882,11 +7996,19 @@ if (window.self === window.top) {
     }
   };
   
+  const removedBlobs = purgeLocalImageDataBlobs();
+  if (removedBlobs > 0) {
+    console.log(`Cleared ${removedBlobs} local image blob(s); MongoDB is now the image source of truth.`);
+  }
   syncWithBackend().then(() => startRealtimeSync());
   setup();
 } else {
   // Production/Extension mode
   OBR.onReady(async () => {
+    const removedBlobs = purgeLocalImageDataBlobs();
+    if (removedBlobs > 0) {
+      console.log(`Cleared ${removedBlobs} local image blob(s); MongoDB is now the image source of truth.`);
+    }
     await syncWithBackend();
     startRealtimeSync();
     const searchParams = new URLSearchParams(window.location.search);

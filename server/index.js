@@ -85,6 +85,7 @@ async function getData() {
             monsters: [], items: [], spells: [],
             overrideMonsters: [], overrideItems: [], overrideSpells: [],
             deleted: [], images: {}, imagesData: {}, entryImages: {},
+            extractedMonsters: [], extractedItems: [],
         };
     } else {
         if (fs.existsSync(DATA_FILE)) {
@@ -112,6 +113,72 @@ async function getImageByKey(key) {
         pathOrUrl: data.images?.[key] ?? null,
         rawData: data.imagesData?.[key] ?? null,
     };
+}
+
+async function storeImageByKey(key, imageData) {
+    const staticRef = `/api/static-image?key=${encodeURIComponent(key)}`;
+    const now = new Date();
+
+    if (dbCollection) {
+        await dbCollection.updateOne(
+            { _id: 'global' },
+            {
+                $set: {
+                    [`images.${key}`]: staticRef,
+                    [`imagesData.${key}`]: imageData,
+                    lastUpdated: now,
+                },
+            },
+            { upsert: true }
+        );
+        broadcastDataUpdate(now);
+        return { url: staticRef, key, storage: 'mongodb' };
+    }
+
+    const existing = fs.existsSync(DATA_FILE)
+        ? JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))
+        : {
+            monsters: [], items: [], spells: [],
+            overrideMonsters: [], overrideItems: [], overrideSpells: [],
+            deleted: [], images: {}, imagesData: {}, entryImages: {},
+        };
+    if (!existing.images) existing.images = {};
+    if (!existing.imagesData) existing.imagesData = {};
+    existing.images[key] = staticRef;
+    existing.imagesData[key] = imageData;
+    existing.lastUpdated = now.toISOString();
+    fs.writeFileSync(DATA_FILE, JSON.stringify(existing, null, 2));
+    broadcastDataUpdate(now);
+    return { url: staticRef, key, storage: 'local' };
+}
+
+async function deleteImageByKey(key) {
+    const now = new Date();
+
+    if (dbCollection) {
+        await dbCollection.updateOne(
+            { _id: 'global' },
+            {
+                $unset: {
+                    [`images.${key}`]: '',
+                    [`imagesData.${key}`]: '',
+                },
+                $set: { lastUpdated: now },
+            }
+        );
+        broadcastDataUpdate(now);
+        return { key, storage: 'mongodb' };
+    }
+
+    if (fs.existsSync(DATA_FILE)) {
+        const existing = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+        if (existing.images) delete existing.images[key];
+        if (existing.imagesData) delete existing.imagesData[key];
+        existing.lastUpdated = now.toISOString();
+        fs.writeFileSync(DATA_FILE, JSON.stringify(existing, null, 2));
+    }
+    broadcastDataUpdate(now);
+    return { key, storage: 'local' };
 }
 
 function namesMatch(a, b) {
@@ -182,6 +249,8 @@ function normalizeLibraryData(data) {
         images: data.images || {},
         imagesData: data.imagesData || {},
         entryImages: data.entryImages || {},
+        extractedMonsters: Array.isArray(data.extractedMonsters) ? data.extractedMonsters : [],
+        extractedItems: Array.isArray(data.extractedItems) ? data.extractedItems : [],
     };
 }
 
@@ -196,10 +265,20 @@ async function saveData(data) {
         overrideMonsters: Array.isArray(data.overrideMonsters) ? data.overrideMonsters : (existing.overrideMonsters || []),
         overrideItems: Array.isArray(data.overrideItems) ? data.overrideItems : (existing.overrideItems || []),
         overrideSpells: Array.isArray(data.overrideSpells) ? data.overrideSpells : (existing.overrideSpells || []),
-        images: data.images || existing.images || {},
-        imagesData: data.imagesData || existing.imagesData || {},
-        entryImages: data.entryImages || existing.entryImages || {},
+        images: data.images !== undefined ? data.images : (existing.images || {}),
+        imagesData: data.imagesData !== undefined ? data.imagesData : (existing.imagesData || {}),
+        entryImages: data.entryImages !== undefined ? data.entryImages : (existing.entryImages || {}),
+        extractedMonsters: Array.isArray(data.extractedMonsters) ? data.extractedMonsters : (existing.extractedMonsters || []),
+        extractedItems: Array.isArray(data.extractedItems) ? data.extractedItems : (existing.extractedItems || []),
     });
+
+    const activeImageKeys = new Set(Object.keys(incoming.images || {}));
+    const mergedImagesData = { ...(existing.imagesData || {}), ...(incoming.imagesData || {}) };
+    const prunedImagesData = {};
+    for (const [key, value] of Object.entries(mergedImagesData)) {
+        if (activeImageKeys.has(key)) prunedImagesData[key] = value;
+    }
+
     const payload = {
         monsters: incoming.monsters,
         items: incoming.items,
@@ -208,9 +287,11 @@ async function saveData(data) {
         overrideMonsters: incoming.overrideMonsters,
         overrideItems: incoming.overrideItems,
         overrideSpells: incoming.overrideSpells,
-        images: { ...(existing.images || {}), ...(incoming.images || {}) },
-        imagesData: { ...(existing.imagesData || {}), ...(incoming.imagesData || {}) },
-        entryImages: { ...(existing.entryImages || {}), ...(incoming.entryImages || {}) },
+        images: { ...(incoming.images || {}) },
+        imagesData: prunedImagesData,
+        entryImages: { ...(incoming.entryImages || {}) },
+        extractedMonsters: incoming.extractedMonsters,
+        extractedItems: incoming.extractedItems,
         lastUpdated: new Date(),
     };
 
@@ -304,6 +385,7 @@ app.post('/api/data', async (req, res) => {
             monsters, items, spells,
             overrideMonsters, overrideItems, overrideSpells,
             deleted, images, imagesData, entryImages,
+            extractedMonsters, extractedItems,
         } = req.body;
         // Validate basic structure
         if (!Array.isArray(monsters) || !Array.isArray(items)) {
@@ -321,6 +403,8 @@ app.post('/api/data', async (req, res) => {
             images: images || {},
             imagesData: imagesData || {},
             entryImages: entryImages || {},
+            extractedMonsters: Array.isArray(extractedMonsters) ? extractedMonsters : [],
+            extractedItems: Array.isArray(extractedItems) ? extractedItems : [],
         });
         res.json({
             success: true,
@@ -561,6 +645,44 @@ app.post('/api/extract-dnd-pdf', upload.single('pdf'), async (req, res) => {
     console.error('DnD PDF extraction error:', err?.response?.data || err.message);
     res.status(500).json({ error: err?.response?.data?.error || err.message });
   }
+});
+
+app.delete('/api/store-image', async (req, res) => {
+    try {
+        const key = req.query.key;
+        if (!key || typeof key !== 'string') {
+            return res.status(400).json({ error: 'Missing key parameter' });
+        }
+        const result = await deleteImageByKey(key);
+        res.json({
+            ...result,
+            lastUpdated: new Date().toISOString(),
+        });
+    } catch (err) {
+        console.error('delete store-image error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Store a single image in MongoDB/local storage by key (avoids localStorage quota on clients)
+app.post('/api/store-image', async (req, res) => {
+    try {
+        const { key, imageData } = req.body;
+        if (!key || typeof key !== 'string') {
+            return res.status(400).json({ error: 'Missing key parameter' });
+        }
+        if (!imageData || typeof imageData !== 'string' || !imageData.startsWith('data:image')) {
+            return res.status(400).json({ error: 'Invalid image data' });
+        }
+        const result = await storeImageByKey(key, imageData.replace(/\s/g, ''));
+        res.json({
+            ...result,
+            lastUpdated: new Date().toISOString(),
+        });
+    } catch (err) {
+        console.error('store-image error:', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Serve persisted images from DB or fallback
