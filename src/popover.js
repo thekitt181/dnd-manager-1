@@ -4,15 +4,24 @@ import SPELL_DATA from './spells.json';
 import Tesseract from 'tesseract.js';
 import OBR, { buildImage, buildShape, buildCurve, buildText } from '@owlbear-rodeo/sdk';
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+window.addEventListener('error', (event) => {
+    const el = document.getElementById('error-container');
+    if (!el) return;
+    el.style.display = 'block';
+    const stack = event.error?.stack || '';
+    el.textContent = `Error:\n${event.message}\n${stack}`;
+});
 
 const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
 
 let spawnPosition = null; // Global spawn position from URL params
 
-const ICON_SVG = "https://raw.githubusercontent.com/FortAwesome/Font-Awesome/master/svgs/solid/dice-d20.svg";
+const ICON_SVG = '/icon.svg';
 
 // OCR.space API Configuration
 const OCR_SPACE_API_KEYS = ['K88315718088957', 'K81029421388957'];
@@ -6275,7 +6284,7 @@ export function searchItems(query) {
                     .fillColor('#ffffff')
                     .strokeColor('#000000')
                     .strokeWidth(2)
-                    .fontFamily('Roboto')
+                    .fontFamily('sans-serif')
                     .textAlign('LEFT')
                     .padding(10)
                     .width(400) // Controls wrapping width
@@ -7465,7 +7474,7 @@ export function searchItems(query) {
                                 item.text.style.strokeColor = "#000000";
                                 item.text.style.strokeWidth = 2;
                                 item.text.style.fontSize = 24;
-                                item.text.style.fontFamily = "Roboto";
+                                item.text.style.fontFamily = "sans-serif";
                                 item.text.style.textAlign = "CENTER";
                                 item.text.style.textAlignVertical = "BOTTOM";
 

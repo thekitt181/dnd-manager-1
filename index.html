@@ -15,13 +15,6 @@
   <div id="app">
     <div style="padding: 20px;">Loading extension...</div>
   </div>
-  <script>
-    window.onerror = function(message, source, lineno, colno, error) {
-      const el = document.getElementById('error-container');
-      el.style.display = 'block';
-      el.innerHTML = `<h3>Error:</h3><pre>${message}\n${error ? error.stack : ''}</pre>`;
-    };
-  </script>
   <script type="module" src="/src/popover.js"></script>
 </body>
 </html>
