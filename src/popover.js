@@ -2624,37 +2624,73 @@ function compressImage(dataUri, quality = 0.8, maxWidth = 1000) {
     });
 }
 
+function validateStoredImageValue(val) {
+    if (!val) return null;
+    if (typeof val !== 'string') return null;
+    if (val === 'null' || val === 'undefined') return null;
+    if (val.trim().startsWith('{') || val.trim().startsWith('%7B')) return null;
+    return val;
+}
+
+function extractStaticImageKey(src) {
+    if (!src || typeof src !== 'string') return null;
+    try {
+        const url = new URL(src, window.location.href);
+        if (url.pathname.endsWith('/api/static-image')) {
+            return url.searchParams.get('key');
+        }
+    } catch (e) {
+        const match = src.match(/\/api\/static-image\?key=([^&]+)/);
+        if (match) return decodeURIComponent(match[1]);
+    }
+    return null;
+}
+
+function getLocalImageDataForKey(key) {
+    if (!key) return null;
+    return validateStoredImageValue(localStorage.getItem(`${key}_data`));
+}
+
+function isSameOriginUrl(url) {
+    try {
+        return new URL(url, window.location.href).origin === window.location.origin;
+    } catch (e) {
+        return false;
+    }
+}
+
+function resolveImageSrcForLoading(src) {
+    if (!src || typeof src !== 'string') return src;
+    const key = extractStaticImageKey(src);
+    if (key) {
+        const localData = getLocalImageDataForKey(key);
+        if (localData) return localData.replace(/\s/g, '');
+    }
+    return src;
+}
+
 // Helper: Get Stored Image with Case-Insensitive Fallback
 function getStoredImage(mode, name) {
     const prefix = mode === 'monster' ? 'monster_image_' : (mode === 'spell' ? 'spell_image_' : 'item_image_');
-    
-    // Helper to validate retrieved value
-    const validate = (val) => {
-        if (!val) return null;
-        if (typeof val !== 'string') return null;
-        if (val === 'null' || val === 'undefined') return null;
-        // Check for JSON-like content (likely corruption or bad paste)
-        if (val.trim().startsWith('{') || val.trim().startsWith('%7B')) return null;
-        return val;
+    const lookup = (baseKey) => {
+        const dataUri = validateStoredImageValue(localStorage.getItem(`${baseKey}_data`));
+        if (dataUri) return dataUri;
+        return validateStoredImageValue(localStorage.getItem(baseKey));
     };
 
-    // 1. Exact match
-    let val = validate(localStorage.getItem(prefix + name));
+    let val = lookup(prefix + name);
     if (val) return val;
-    
-    // 2. Lowercase match
-    val = validate(localStorage.getItem(prefix + name.toLowerCase()));
+
+    val = lookup(prefix + name.toLowerCase());
     if (val) return val;
-    
-    // 3. Title Case match (simple)
+
     const titleCase = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
-    val = validate(localStorage.getItem(prefix + titleCase));
+    val = lookup(prefix + titleCase);
     if (val) return val;
-    
-    // 4. Uppercase match
-    val = validate(localStorage.getItem(prefix + name.toUpperCase()));
+
+    val = lookup(prefix + name.toUpperCase());
     if (val) return val;
-    
+
     return null;
 }
 
@@ -2744,6 +2780,26 @@ async function ensureShortImageUrl(url, name = null, folder = null) {
     return url;
 }
 
+const OBR_IMAGE_URL_MAX = 2048;
+
+async function preferLocalDataUriForObr(url, name, folder) {
+    if (!url || url.startsWith('data:')) return url;
+    const key =
+        extractStaticImageKey(url) ||
+        `${folder === 'items' ? 'item_image_' : folder === 'spells' ? 'spell_image_' : 'monster_image_'}${name}`;
+    let local = getLocalImageDataForKey(key);
+    if (!local) return url;
+    local = local.replace(/\s/g, '');
+    if (local.length <= OBR_IMAGE_URL_MAX) return local;
+    try {
+        const compressed = await compressImage(local, 0.45);
+        if (compressed.length <= OBR_IMAGE_URL_MAX) return compressed;
+    } catch (e) {
+        console.warn('Could not compress image for OBR fallback:', e);
+    }
+    return url;
+}
+
 // Helper to generate a dynamic placeholder image (SVG Data URI)
 function getPlaceholderImage(name, type = 'monster') {
     const letter = name ? name.charAt(0).toUpperCase() : '?';
@@ -2816,7 +2872,7 @@ export async function addMonsterToScene(monster) {
           } catch (e) {}
       }
       
-      const exists = await checkImage(imageUrl, 500);
+      const exists = await checkImage(resolveImageSrcForLoading(imageUrl), 500);
       if (!exists) {
           console.warn(`Image URL failed to load: ${imageUrl}. Using placeholder.`);
           imageUrl = null; // Skip all the fallback checks, go straight to placeholder
@@ -2831,6 +2887,7 @@ export async function addMonsterToScene(monster) {
   // Ensure URL is short enough for OBR (upload if necessary)
   // Since we are spawning a monster, if we upload, store it in 'monsters' folder with the monster name
   imageUrl = await ensureShortImageUrl(imageUrl, monster.name, 'monsters');
+  imageUrl = await preferLocalDataUriForObr(imageUrl, monster.name, 'monsters');
 
   console.log(`[v${EXTENSION_VERSION}] Resolved imageUrl for ${monster.name}:`, imageUrl);
 
@@ -3159,6 +3216,7 @@ export async function addMonsterToScene(monster) {
 
       // Ensure URL is short enough for OBR
       imageUrl = await ensureShortImageUrl(imageUrl, itemData.name, 'items');
+      imageUrl = await preferLocalDataUriForObr(imageUrl, itemData.name, 'items');
 
       // Detect MIME
       let mimeType = 'image/svg+xml';
@@ -3444,9 +3502,18 @@ async function processAndRemoveBackground(source) {
 
         const nextAttempt = (level) => {
             if (level === 1) {
-                console.log("Retrying with local proxy...");
-                // Use local proxy (relative path, works if served from same origin)
-                tryLoadImage('/api/proxy?url=' + encodeURIComponent(source), 1);
+                const localSrc = resolveImageSrcForLoading(source);
+                if (localSrc !== source && localSrc.startsWith('data:')) {
+                    console.log("Retrying with local image data...");
+                    tryLoadImage(localSrc, 1);
+                    return;
+                }
+                if (!isSameOriginUrl(source)) {
+                    console.log("Retrying with local proxy...");
+                    tryLoadImage('/api/proxy?url=' + encodeURIComponent(source), 1);
+                } else {
+                    resolve(source);
+                }
             } else if (level === 2) {
                 console.log("Retrying with corsproxy.io...");
                 tryLoadImage('https://corsproxy.io/?' + encodeURIComponent(source), 2);
@@ -3456,40 +3523,43 @@ async function processAndRemoveBackground(source) {
             }
         };
 
-        // Start with direct load
+        // Start with direct load (prefer local data URIs for static-image URLs)
         if (typeof source === 'string' && !source.startsWith('data:')) {
-            tryLoadImage(source, 0);
+            tryLoadImage(resolveImageSrcForLoading(source), 0);
         } else {
             resolve(source);
         }
     });
 }
 
-// Helper: Get Image Dimensions (with proxy fallback)
+// Helper: Get Image Dimensions (with local data + proxy fallback)
 const getImageDimensions = (src) => {
+    const resolvedSrc = resolveImageSrcForLoading(src);
     return new Promise((resolve) => {
         const tryLoad = (url, attempt) => {
             const img = new Image();
             img.onload = () => resolve({ width: img.width, height: img.height });
             img.onerror = () => {
                 if (attempt === 0) {
-                    // Try local proxy
-                    tryLoad('/api/proxy?url=' + encodeURIComponent(src), 1);
-                } else if (attempt === 1) {
-                    // Try corsproxy.io
+                    if (resolvedSrc !== src && resolvedSrc.startsWith('data:')) {
+                        tryLoad(resolvedSrc, 1);
+                    } else if (!isSameOriginUrl(src)) {
+                        tryLoad('/api/proxy?url=' + encodeURIComponent(src), 1);
+                    } else {
+                        resolve(null);
+                    }
+                } else if (attempt === 1 && !isSameOriginUrl(src)) {
                     tryLoad('https://corsproxy.io/?' + encodeURIComponent(src), 2);
-                } else if (attempt === 2) {
-                    // Try allorigins.win
+                } else if (attempt === 2 && !isSameOriginUrl(src)) {
                     tryLoad('https://api.allorigins.win/raw?url=' + encodeURIComponent(src), 3);
                 } else {
-                    // Give up
                     resolve(null);
                 }
             };
             img.src = url;
         };
-        
-        tryLoad(src, 0);
+
+        tryLoad(resolvedSrc, 0);
     });
 };
   

@@ -94,6 +94,26 @@ async function getData() {
     }
 }
 
+// Fetch a single stored image without loading the full library document
+async function getImageByKey(key) {
+    if (dbCollection) {
+        const doc = await dbCollection.findOne(
+            { _id: 'global' },
+            { projection: { [`images.${key}`]: 1, [`imagesData.${key}`]: 1 } }
+        );
+        return {
+            pathOrUrl: doc?.images?.[key] ?? null,
+            rawData: doc?.imagesData?.[key] ?? null,
+        };
+    }
+
+    const data = await getData();
+    return {
+        pathOrUrl: data.images?.[key] ?? null,
+        rawData: data.imagesData?.[key] ?? null,
+    };
+}
+
 function namesMatch(a, b) {
     if (!a || !b) return false;
     return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
@@ -548,9 +568,7 @@ app.get('/api/static-image', async (req, res) => {
     try {
         const key = req.query.key;
         if (!key) return res.status(400).json({ error: 'Missing key parameter' });
-        const data = await getData();
-        const pathOrUrl = data.images ? data.images[key] : null;
-        const rawData = data.imagesData ? data.imagesData[key] : null;
+        const { pathOrUrl, rawData } = await getImageByKey(key);
         
         // 1) If we have a file path under dist, serve that
         if (pathOrUrl && pathOrUrl.startsWith('/images/')) {
