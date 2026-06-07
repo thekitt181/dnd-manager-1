@@ -94,10 +94,81 @@ async function getData() {
     }
 }
 
+function namesMatch(a, b) {
+    if (!a || !b) return false;
+    return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+}
+
+function dedupeByEntryName(entries) {
+    const map = new Map();
+    for (const entry of entries || []) {
+        if (!entry?.name) continue;
+        map.set(String(entry.name).trim().toLowerCase(), entry);
+    }
+    return Array.from(map.values());
+}
+
+function normalizeLibraryData(data) {
+    const overrideMonsters = dedupeByEntryName(data.overrideMonsters);
+    const overrideItems = dedupeByEntryName(data.overrideItems);
+    const overrideSpells = dedupeByEntryName(data.overrideSpells);
+    let deleted = Array.isArray(data.deleted) ? [...data.deleted] : [];
+
+    const ensureDeleted = (name) => {
+        if (!name) return;
+        if (!deleted.some((entry) => namesMatch(entry, name))) {
+            deleted.push(String(name).trim());
+        }
+    };
+
+    for (const override of [...overrideMonsters, ...overrideItems, ...overrideSpells]) {
+        if (override.originBookName && !namesMatch(override.originBookName, override.name)) {
+            ensureDeleted(override.originBookName);
+        }
+    }
+
+    const filterCustom = (customs, overrides) => {
+        const overrideNames = new Set(
+            overrides.map((entry) => String(entry.name).trim().toLowerCase())
+        );
+        const originNames = new Set(
+            overrides
+                .filter((entry) => entry.originBookName)
+                .map((entry) => String(entry.originBookName).trim().toLowerCase())
+        );
+        const deletedNames = new Set(
+            deleted.map((entry) => String(entry).trim().toLowerCase())
+        );
+
+        return (customs || []).filter((entry) => {
+            if (!entry?.name) return false;
+            const name = String(entry.name).trim().toLowerCase();
+            if (overrideNames.has(name)) return false;
+            if (originNames.has(name)) return false;
+            if (deletedNames.has(name)) return false;
+            if (entry.originBookName) return false;
+            return true;
+        });
+    };
+
+    return {
+        monsters: filterCustom(data.monsters, overrideMonsters),
+        items: filterCustom(data.items, overrideItems),
+        spells: filterCustom(data.spells, overrideSpells),
+        deleted,
+        overrideMonsters,
+        overrideItems,
+        overrideSpells,
+        images: data.images || {},
+        imagesData: data.imagesData || {},
+        entryImages: data.entryImages || {},
+    };
+}
+
 // Helper to save data — client sends a full snapshot of library data
 async function saveData(data) {
     const existing = await getData();
-    const payload = {
+    const incoming = normalizeLibraryData({
         monsters: Array.isArray(data.monsters) ? data.monsters : (existing.monsters || []),
         items: Array.isArray(data.items) ? data.items : (existing.items || []),
         spells: Array.isArray(data.spells) ? data.spells : (existing.spells || []),
@@ -105,9 +176,21 @@ async function saveData(data) {
         overrideMonsters: Array.isArray(data.overrideMonsters) ? data.overrideMonsters : (existing.overrideMonsters || []),
         overrideItems: Array.isArray(data.overrideItems) ? data.overrideItems : (existing.overrideItems || []),
         overrideSpells: Array.isArray(data.overrideSpells) ? data.overrideSpells : (existing.overrideSpells || []),
-        images: { ...(existing.images || {}), ...(data.images || {}) },
-        imagesData: { ...(existing.imagesData || {}), ...(data.imagesData || {}) },
-        entryImages: { ...(existing.entryImages || {}), ...(data.entryImages || {}) },
+        images: data.images || existing.images || {},
+        imagesData: data.imagesData || existing.imagesData || {},
+        entryImages: data.entryImages || existing.entryImages || {},
+    });
+    const payload = {
+        monsters: incoming.monsters,
+        items: incoming.items,
+        spells: incoming.spells,
+        deleted: incoming.deleted,
+        overrideMonsters: incoming.overrideMonsters,
+        overrideItems: incoming.overrideItems,
+        overrideSpells: incoming.overrideSpells,
+        images: { ...(existing.images || {}), ...(incoming.images || {}) },
+        imagesData: { ...(existing.imagesData || {}), ...(incoming.imagesData || {}) },
+        entryImages: { ...(existing.entryImages || {}), ...(incoming.entryImages || {}) },
         lastUpdated: new Date(),
     };
 
@@ -132,7 +215,17 @@ app.get('/api/health', (req, res) => {
 app.get('/api/data', async (req, res) => {
     try {
         const data = await getData();
-        res.json(data);
+        const normalized = normalizeLibraryData(data);
+        res.json({
+            ...data,
+            monsters: normalized.monsters,
+            items: normalized.items,
+            spells: normalized.spells,
+            deleted: normalized.deleted,
+            overrideMonsters: normalized.overrideMonsters,
+            overrideItems: normalized.overrideItems,
+            overrideSpells: normalized.overrideSpells,
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

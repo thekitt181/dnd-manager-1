@@ -1667,6 +1667,105 @@ function repairRenamedSourceBookOverrides({ save = true } = {}) {
     return changed;
 }
 
+function getCustomList(type) {
+    if (type === 'monster') return getCustomMonsters();
+    if (type === 'item') return getCustomItems();
+    return getCustomSpells();
+}
+
+function dedupeOverridesByName(overrides) {
+    const map = new Map();
+    for (const entry of overrides || []) {
+        if (!entry?.name) continue;
+        map.set(normalizeEntryName(entry.name).toLowerCase(), entry);
+    }
+    return Array.from(map.values());
+}
+
+function stripReplacedFromCustom(customs, overrides, type) {
+    const overrideNames = new Set(
+        overrides.map((entry) => normalizeEntryName(entry.name).toLowerCase())
+    );
+    const replacedOrigins = new Set(
+        overrides
+            .filter((entry) => entry.originBookName)
+            .map((entry) => normalizeEntryName(entry.originBookName).toLowerCase())
+    );
+    return (customs || []).filter((entry) => {
+        const name = normalizeEntryName(entry.name).toLowerCase();
+        if (overrideNames.has(name)) return false;
+        if (replacedOrigins.has(name)) return false;
+        if (entry.originBookName) return false;
+        if (isSourceBookEntry(entry.name, type)) return false;
+        return true;
+    });
+}
+
+function buildDeletedForMongo(overrides, deleted) {
+    const nextDeleted = [...(deleted || [])];
+    const add = (name) => {
+        if (!name) return;
+        if (!nextDeleted.some((entry) => namesMatch(entry, name))) {
+            nextDeleted.push(normalizeEntryName(name));
+        }
+    };
+    for (const override of overrides) {
+        if (override.originBookName && !namesMatch(override.originBookName, override.name)) {
+            add(override.originBookName);
+        }
+    }
+    return nextDeleted;
+}
+
+function normalizeMongoSnapshot({ persist = true } = {}) {
+    reconcileCustomAndOverrides({ save: false });
+    repairRenamedSourceBookOverrides({ save: false });
+
+    const storage = {
+        monster: {
+            customKey: 'dnd_extension_custom_monsters',
+            overrideKey: 'dnd_extension_override_monsters',
+        },
+        item: {
+            customKey: 'dnd_extension_custom_items',
+            overrideKey: 'dnd_extension_override_items',
+        },
+        spell: {
+            customKey: 'dnd_extension_custom_spells',
+            overrideKey: 'dnd_extension_override_spells',
+        },
+    };
+
+    let deleted = getDeletedItems();
+    for (const type of ['monster', 'item', 'spell']) {
+        const overrides = dedupeOverridesByName(getOverrideList(type));
+        const customs = stripReplacedFromCustom(getCustomList(type), overrides, type);
+        deleted = buildDeletedForMongo(overrides, deleted);
+        for (const override of overrides) {
+            if (override.originBookName) hideSourceBookOriginal(type, override.originBookName);
+        }
+        if (persist) {
+            localStorage.setItem(storage[type].overrideKey, JSON.stringify(overrides));
+            localStorage.setItem(storage[type].customKey, JSON.stringify(customs));
+        }
+    }
+
+    deleted = getDeletedItems();
+    if (persist) {
+        localStorage.setItem('dnd_extension_deleted_items', JSON.stringify(deleted));
+    }
+
+    return {
+        monsters: getCustomMonsters(),
+        items: getCustomItems(),
+        spells: getCustomSpells(),
+        overrideMonsters: getOverrideMonsters(),
+        overrideItems: getOverrideItems(),
+        overrideSpells: getOverrideSpells(),
+        deleted: getDeletedItems(),
+    };
+}
+
 function getEntryImageKey(type, name) {
     if (type === 'monster') return `monster_image_${name}`;
     if (type === 'item') return `item_image_${name}`;
@@ -1754,7 +1853,11 @@ function saveOverrideMonster(monster, { originName = null } = {}) {
     if (index >= 0) list[index] = entry;
     else list.push(entry);
     localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(list));
-    const customs = getCustomMonsters().filter((m) => !namesMatch(m.name, entry.name));
+    const customs = getCustomMonsters().filter((m) =>
+        !namesMatch(m.name, entry.name) &&
+        !(entry.originBookName && namesMatch(m.name, entry.originBookName)) &&
+        !(originName && namesMatch(m.name, originName))
+    );
     localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customs));
     ensureOverrideHidesBuiltIn('monster', entry, originName);
     saveToBackend();
@@ -1770,7 +1873,11 @@ function saveOverrideItem(item, { originName = null } = {}) {
     if (index >= 0) list[index] = entry;
     else list.push(entry);
     localStorage.setItem('dnd_extension_override_items', JSON.stringify(list));
-    const customs = getCustomItems().filter((i) => !namesMatch(i.name, entry.name));
+    const customs = getCustomItems().filter((i) =>
+        !namesMatch(i.name, entry.name) &&
+        !(entry.originBookName && namesMatch(i.name, entry.originBookName)) &&
+        !(originName && namesMatch(i.name, originName))
+    );
     localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customs));
     ensureOverrideHidesBuiltIn('item', entry, originName);
     saveToBackend();
@@ -1786,7 +1893,11 @@ function saveOverrideSpell(spell, { originName = null } = {}) {
     if (index >= 0) list[index] = entry;
     else list.push(entry);
     localStorage.setItem('dnd_extension_override_spells', JSON.stringify(list));
-    const customs = getCustomSpells().filter((s) => !namesMatch(s.name, entry.name));
+    const customs = getCustomSpells().filter((s) =>
+        !namesMatch(s.name, entry.name) &&
+        !(entry.originBookName && namesMatch(s.name, entry.originBookName)) &&
+        !(originName && namesMatch(s.name, originName))
+    );
     localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customs));
     ensureOverrideHidesBuiltIn('spell', entry, originName);
     saveToBackend();
@@ -2161,6 +2272,7 @@ function applyRemoteSyncData(data) {
 
     reconcileCustomAndOverrides({ save: false });
     if (repairRenamedSourceBookOverrides({ save: false })) changed = true;
+    normalizeMongoSnapshot({ persist: true });
     return changed;
 }
 
@@ -2251,13 +2363,14 @@ function startRealtimeSync() {
 let saveToBackendQueue = Promise.resolve();
 
 function collectBackendPayload() {
-    const monsters = getCustomMonsters();
-    const items = getCustomItems();
-    const spells = getCustomSpells();
-    const overrideMonsters = getOverrideMonsters();
-    const overrideItems = getOverrideItems();
-    const overrideSpells = getOverrideSpells();
-    const deleted = getDeletedItems();
+    const snapshot = normalizeMongoSnapshot({ persist: true });
+    const monsters = snapshot.monsters;
+    const items = snapshot.items;
+    const spells = snapshot.spells;
+    const overrideMonsters = snapshot.overrideMonsters;
+    const overrideItems = snapshot.overrideItems;
+    const overrideSpells = snapshot.overrideSpells;
+    const deleted = snapshot.deleted;
 
     const images = {};
     const imagesData = {};
