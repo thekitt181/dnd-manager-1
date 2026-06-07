@@ -1452,13 +1452,40 @@ function isSourceBookEntry(name, type) {
     return false;
 }
 
+function getOverrideList(type) {
+    if (type === 'monster') return getOverrideMonsters();
+    if (type === 'item') return getOverrideItems();
+    return getOverrideSpells();
+}
+
+function isOverrideEntry(name, type) {
+    return getOverrideList(type).some((entry) => namesMatch(entry.name, name));
+}
+
 function shouldSaveAsOverride(type, originalName, entryName) {
-    const lookupName = originalName || entryName;
-    const builtIn = type === 'monster' ? findBuiltInMonster(lookupName)
-        : type === 'item' ? findBuiltInItem(lookupName)
-        : findBuiltInSpell(lookupName);
-    if (!builtIn) return false;
-    return namesMatch(entryName, builtIn.name);
+    if (originalName && isSourceBookEntry(originalName, type)) return true;
+    if (originalName && isOverrideEntry(originalName, type)) return true;
+    if (isSourceBookEntry(entryName, type)) return true;
+    return false;
+}
+
+function findBuiltInOrigin(type, originName) {
+    if (!originName) return null;
+    if (type === 'monster') return findBuiltInMonster(originName);
+    if (type === 'item') return findBuiltInItem(originName);
+    return findBuiltInSpell(originName);
+}
+
+function applySourceBookOrigin(entry, type, originName = null) {
+    const origin = findBuiltInOrigin(type, originName || entry.name);
+    if (!origin) return entry;
+    const merged = { ...origin, ...entry, name: entry.name };
+    if (origin.source) merged.source = origin.source;
+    else if (entry.source && entry.source !== 'Custom') merged.source = entry.source;
+    if (originName && !namesMatch(originName, entry.name) && isSourceBookEntry(originName, type)) {
+        merged.originBookName = normalizeEntryName(originName);
+    }
+    return merged;
 }
 
 function getOverrideMonsters() {
@@ -1481,15 +1508,52 @@ function getCustomSpells() {
     try { return JSON.parse(localStorage.getItem('dnd_extension_custom_spells') || '[]'); } catch (e) { return []; }
 }
 
-function preserveSourceBookMetadata(entry, type) {
-    const builtIn = type === 'monster' ? findBuiltInMonster(entry.name)
-        : type === 'item' ? findBuiltInItem(entry.name)
-        : findBuiltInSpell(entry.name);
-    if (!builtIn) return entry;
-    const merged = { ...builtIn, ...entry, name: builtIn.name };
-    if (builtIn.source) merged.source = builtIn.source;
-    else if (entry.source && entry.source !== 'Custom') merged.source = entry.source;
-    return merged;
+function preserveSourceBookMetadata(entry, type, originName = null) {
+    return applySourceBookOrigin(entry, type, originName || entry.name);
+}
+
+function removeFromEntryList(type, name, listKind) {
+    const storageKeys = {
+        monster: { override: 'dnd_extension_override_monsters', custom: 'dnd_extension_custom_monsters' },
+        item: { override: 'dnd_extension_override_items', custom: 'dnd_extension_custom_items' },
+        spell: { override: 'dnd_extension_override_spells', custom: 'dnd_extension_custom_spells' },
+    };
+    const getters = {
+        override: getOverrideList,
+        custom: (t) => t === 'monster' ? getCustomMonsters() : t === 'item' ? getCustomItems() : getCustomSpells(),
+    };
+    const key = storageKeys[type][listKind];
+    const list = (listKind === 'override' ? getOverrideList(type) : getters.custom(type))
+        .filter((entry) => !namesMatch(entry.name, name));
+    localStorage.setItem(key, JSON.stringify(list));
+}
+
+function migrateEntryAssets(type, oldName, newName) {
+    if (!oldName || !newName || namesMatch(oldName, newName)) return;
+    const oldImgKey = getEntryImageKey(type, oldName);
+    const newImgKey = getEntryImageKey(type, newName);
+    const img = localStorage.getItem(oldImgKey);
+    if (img) {
+        localStorage.setItem(newImgKey, img);
+        localStorage.removeItem(oldImgKey);
+    }
+    const oldHistoryKey = `dnd_extension_entry_images_${oldName}`;
+    const newHistoryKey = `dnd_extension_entry_images_${newName}`;
+    const history = localStorage.getItem(oldHistoryKey);
+    if (history) {
+        localStorage.setItem(newHistoryKey, history);
+        localStorage.removeItem(oldHistoryKey);
+    }
+}
+
+function handleSourceBookRename(type, oldName, newName) {
+    if (!oldName || !newName || namesMatch(oldName, newName)) return;
+    if (isSourceBookEntry(oldName, type)) {
+        deleteItem(oldName);
+    }
+    removeFromEntryList(type, oldName, 'override');
+    removeFromEntryList(type, oldName, 'custom');
+    migrateEntryAssets(type, oldName, newName);
 }
 
 function getEntryImageKey(type, name) {
@@ -1516,7 +1580,7 @@ function buildFullMonsterEntry(updates, { originalName = null } = {}) {
     if (updates.name) merged.name = updates.name;
     merged = attachImageToEntry(merged, 'monster');
     if (shouldSaveAsOverride('monster', originalName, merged.name)) {
-        return preserveSourceBookMetadata(merged, 'monster');
+        return applySourceBookOrigin(merged, 'monster', originalName);
     }
     return merged;
 }
@@ -1528,7 +1592,7 @@ function buildFullItemEntry(updates, { originalName = null } = {}) {
     if (updates.name) merged.name = updates.name;
     merged = attachImageToEntry(merged, 'item');
     if (shouldSaveAsOverride('item', originalName, merged.name)) {
-        return preserveSourceBookMetadata(merged, 'item');
+        return applySourceBookOrigin(merged, 'item', originalName);
     }
     return merged;
 }
@@ -1540,7 +1604,7 @@ function buildFullSpellEntry(updates, { originalName = null } = {}) {
     if (updates.name) merged.name = updates.name;
     merged = attachImageToEntry(merged, 'spell');
     if (shouldSaveAsOverride('spell', originalName, merged.name)) {
-        return preserveSourceBookMetadata(merged, 'spell');
+        return applySourceBookOrigin(merged, 'spell', originalName);
     }
     return merged;
 }
@@ -1569,10 +1633,10 @@ function syncEntryImageToLibrary(entryName, imgSrc, type) {
     }
 }
 
-function saveOverrideMonster(monster) {
+function saveOverrideMonster(monster, { originName = null } = {}) {
     const list = getOverrideMonsters();
-    const entry = preserveSourceBookMetadata(attachImageToEntry(monster, 'monster'), 'monster');
-    const index = list.findIndex(m => m.name === entry.name);
+    const entry = preserveSourceBookMetadata(attachImageToEntry(monster, 'monster'), 'monster', originName);
+    const index = list.findIndex((m) => namesMatch(m.name, entry.name));
     if (index >= 0) list[index] = entry;
     else list.push(entry);
     localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(list));
@@ -1582,10 +1646,10 @@ function saveOverrideMonster(monster) {
     restoreItem(entry.name);
     return true;
 }
-function saveOverrideItem(item) {
+function saveOverrideItem(item, { originName = null } = {}) {
     const list = getOverrideItems();
-    const entry = preserveSourceBookMetadata(attachImageToEntry(item, 'item'), 'item');
-    const index = list.findIndex(i => i.name === entry.name);
+    const entry = preserveSourceBookMetadata(attachImageToEntry(item, 'item'), 'item', originName);
+    const index = list.findIndex((i) => namesMatch(i.name, entry.name));
     if (index >= 0) list[index] = entry;
     else list.push(entry);
     localStorage.setItem('dnd_extension_override_items', JSON.stringify(list));
@@ -1595,10 +1659,10 @@ function saveOverrideItem(item) {
     restoreItem(entry.name);
     return true;
 }
-function saveOverrideSpell(spell) {
+function saveOverrideSpell(spell, { originName = null } = {}) {
     const list = getOverrideSpells();
-    const entry = preserveSourceBookMetadata(attachImageToEntry(spell, 'spell'), 'spell');
-    const index = list.findIndex(s => s.name === entry.name);
+    const entry = preserveSourceBookMetadata(attachImageToEntry(spell, 'spell'), 'spell', originName);
+    const index = list.findIndex((s) => namesMatch(s.name, entry.name));
     if (index >= 0) list[index] = entry;
     else list.push(entry);
     localStorage.setItem('dnd_extension_override_spells', JSON.stringify(list));
@@ -1609,27 +1673,43 @@ function saveOverrideSpell(spell) {
     return true;
 }
 
+function resolveSourceBookOriginName(type, originalName, entryName) {
+    if (originalName && isSourceBookEntry(originalName, type)) return normalizeEntryName(originalName);
+    if (isSourceBookEntry(entryName, type)) return normalizeEntryName(entryName);
+    const existing = getOverrideList(type).find((entry) => namesMatch(entry.name, originalName || entryName));
+    return existing?.originBookName || null;
+}
+
 function saveMonsterEntry(monster, { originalName = null } = {}) {
     const full = buildFullMonsterEntry(monster, { originalName });
     if (shouldSaveAsOverride('monster', originalName, full.name)) {
-        const builtIn = findBuiltInMonster(originalName || full.name);
-        return saveOverrideMonster({ ...full, name: builtIn.name });
+        if (originalName && !namesMatch(originalName, full.name)) {
+            handleSourceBookRename('monster', originalName, full.name);
+        }
+        const originName = resolveSourceBookOriginName('monster', originalName, full.name);
+        return saveOverrideMonster(full, { originName });
     }
     return saveCustomMonster(full);
 }
 function saveItemEntry(item, { originalName = null } = {}) {
     const full = buildFullItemEntry(item, { originalName });
     if (shouldSaveAsOverride('item', originalName, full.name)) {
-        const builtIn = findBuiltInItem(originalName || full.name);
-        return saveOverrideItem({ ...full, name: builtIn.name });
+        if (originalName && !namesMatch(originalName, full.name)) {
+            handleSourceBookRename('item', originalName, full.name);
+        }
+        const originName = resolveSourceBookOriginName('item', originalName, full.name);
+        return saveOverrideItem(full, { originName });
     }
     return saveCustomItem(full);
 }
 function saveSpellEntry(spell, { originalName = null } = {}) {
     const full = buildFullSpellEntry(spell, { originalName });
     if (shouldSaveAsOverride('spell', originalName, full.name)) {
-        const builtIn = findBuiltInSpell(originalName || full.name);
-        return saveOverrideSpell({ ...full, name: builtIn.name });
+        if (originalName && !namesMatch(originalName, full.name)) {
+            handleSourceBookRename('spell', originalName, full.name);
+        }
+        const originName = resolveSourceBookOriginName('spell', originalName, full.name);
+        return saveOverrideSpell(full, { originName });
     }
     return saveCustomSpell(full);
 }
@@ -1660,7 +1740,11 @@ function getSpellByName(name) {
 }
 
 function mergeSourceBookEntries(builtIns, overrides, deleted) {
-    const activeBuiltIns = builtIns.filter((entry) => !overrides.some((o) => namesMatch(o.name, entry.name)));
+    const overriddenBuiltIn = (builtInName) => overrides.some((o) =>
+        namesMatch(o.name, builtInName) ||
+        (o.originBookName && namesMatch(o.originBookName, builtInName))
+    );
+    const activeBuiltIns = builtIns.filter((entry) => !overriddenBuiltIn(entry.name));
     return [...activeBuiltIns, ...overrides].filter((entry) => !deleted.some((d) => namesMatch(d, entry.name)));
 }
 
@@ -1712,17 +1796,22 @@ migrateLegacyOverrides();
 function reconcileCustomAndOverrides({ save = true } = {}) {
     let changed = false;
 
+    const shouldMoveToOverrides = (entry, type) =>
+        isSourceBookEntry(entry.name, type) ||
+        (entry.originBookName && isSourceBookEntry(entry.originBookName, type));
+
     const moveMisplaced = (customList, overrideList, type) => {
-        const toMove = customList.filter((entry) => isSourceBookEntry(entry.name, type));
+        const toMove = customList.filter((entry) => shouldMoveToOverrides(entry, type));
         if (!toMove.length) return customList;
         toMove.forEach((entry) => {
-            const normalized = preserveSourceBookMetadata(entry, type);
+            const originName = entry.originBookName || entry.name;
+            const normalized = preserveSourceBookMetadata(entry, type, originName);
             const idx = overrideList.findIndex((o) => namesMatch(o.name, normalized.name));
             if (idx === -1) overrideList.push(normalized);
             else overrideList[idx] = { ...overrideList[idx], ...normalized };
         });
         changed = true;
-        return customList.filter((entry) => !isSourceBookEntry(entry.name, type));
+        return customList.filter((entry) => !shouldMoveToOverrides(entry, type));
     };
 
     const overrideMonsters = getOverrideMonsters();
@@ -3981,11 +4070,22 @@ export function searchItems(query) {
   const openEditor = (mode, data = null) => {
       editorMode = mode;
       if (data) {
-          const builtIn = mode === 'monster' ? findBuiltInMonster(data.name)
-              : mode === 'item' ? findBuiltInItem(data.name)
+          const type = mode === 'monster' ? 'monster' : mode === 'item' ? 'item' : 'spell';
+          const builtIn = type === 'monster' ? findBuiltInMonster(data.name)
+              : type === 'item' ? findBuiltInItem(data.name)
               : findBuiltInSpell(data.name);
-          editorOriginalName = builtIn ? builtIn.name : normalizeEntryName(data.name);
-          editorOriginalSource = builtIn?.source || data.source || null;
+          const override = getOverrideList(type).find((entry) => namesMatch(entry.name, data.name));
+          if (builtIn) {
+              editorOriginalName = builtIn.name;
+              editorOriginalSource = builtIn.source || null;
+          } else if (override?.originBookName) {
+              const originBuiltIn = findBuiltInOrigin(type, override.originBookName);
+              editorOriginalName = normalizeEntryName(data.name);
+              editorOriginalSource = originBuiltIn?.source || override.source || data.source || null;
+          } else {
+              editorOriginalName = normalizeEntryName(data.name);
+              editorOriginalSource = data.source || null;
+          }
       } else {
           editorOriginalName = null;
           editorOriginalSource = null;
@@ -4324,8 +4424,10 @@ export function searchItems(query) {
           if (!saveItemEntry(newItem, { originalName: editorOriginalName })) return;
       }
       
-      // Handle Rename of Custom Item (Cleanup old)
-      if (editorOriginalName && editorOriginalName !== name) {
+      // Handle rename cleanup for custom entries only (source-book overrides handled in save*Entry)
+      const editorType = editorMode === 'monster' ? 'monster' : editorMode === 'spell' ? 'spell' : 'item';
+      const sourceBookRenameHandled = shouldSaveAsOverride(editorType, editorOriginalName, name);
+      if (editorOriginalName && editorOriginalName !== name && !sourceBookRenameHandled) {
           if (editorMode === 'monster') {
               const customs = getCustomMonsters();
               const oldIdx = customs.findIndex(m => m.name === editorOriginalName);
@@ -6871,9 +6973,9 @@ export function searchItems(query) {
           </div>
         `).join('');
     } else if (activeTab === 'custom' && isGM) {
-        const customMonsters = getCustomMonsters().filter((m) => !isBuiltInMonster(m.name));
-        const customItems = getCustomItems().filter((i) => !isBuiltInItem(i.name));
-        const customSpells = getCustomSpells().filter((s) => !isBuiltInSpell(s.name));
+        const customMonsters = getCustomMonsters().filter((m) => !isBuiltInMonster(m.name) && !m.originBookName);
+        const customItems = getCustomItems().filter((i) => !isBuiltInItem(i.name) && !i.originBookName);
+        const customSpells = getCustomSpells().filter((s) => !isBuiltInSpell(s.name) && !s.originBookName);
         const allCustom = [...customMonsters.map(m => ({...m, type: 'Monster'})), ...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
         
         let results = allCustom;
@@ -6892,8 +6994,8 @@ export function searchItems(query) {
           </div>
         `).join('');
     } else if (activeTab === 'custom' && !isGM) {
-        const customItems = getCustomItems().filter((i) => !isBuiltInItem(i.name));
-        const customSpells = getCustomSpells().filter((s) => !isBuiltInSpell(s.name));
+        const customItems = getCustomItems().filter((i) => !isBuiltInItem(i.name) && !i.originBookName);
+        const customSpells = getCustomSpells().filter((s) => !isBuiltInSpell(s.name) && !s.originBookName);
         const allCustom = [...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
         
         let results = allCustom;
