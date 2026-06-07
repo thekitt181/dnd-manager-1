@@ -94,9 +94,23 @@ async function getData() {
     }
 }
 
-// Helper to save data
+// Helper to save data — client sends a full snapshot of library data
 async function saveData(data) {
-    const payload = { ...data, lastUpdated: new Date() };
+    const existing = await getData();
+    const payload = {
+        monsters: Array.isArray(data.monsters) ? data.monsters : (existing.monsters || []),
+        items: Array.isArray(data.items) ? data.items : (existing.items || []),
+        spells: Array.isArray(data.spells) ? data.spells : (existing.spells || []),
+        deleted: Array.isArray(data.deleted) ? data.deleted : (existing.deleted || []),
+        overrideMonsters: Array.isArray(data.overrideMonsters) ? data.overrideMonsters : (existing.overrideMonsters || []),
+        overrideItems: Array.isArray(data.overrideItems) ? data.overrideItems : (existing.overrideItems || []),
+        overrideSpells: Array.isArray(data.overrideSpells) ? data.overrideSpells : (existing.overrideSpells || []),
+        images: { ...(existing.images || {}), ...(data.images || {}) },
+        imagesData: { ...(existing.imagesData || {}), ...(data.imagesData || {}) },
+        entryImages: { ...(existing.entryImages || {}), ...(data.entryImages || {}) },
+        lastUpdated: new Date(),
+    };
+
     if (dbCollection) {
         await dbCollection.updateOne(
             { _id: 'global' },

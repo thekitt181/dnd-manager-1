@@ -1455,9 +1455,89 @@ function preserveSourceBookMetadata(entry, type) {
     return { ...builtIn, ...entry, source: builtIn.source || entry.source };
 }
 
+function getEntryImageKey(type, name) {
+    if (type === 'monster') return `monster_image_${name}`;
+    if (type === 'item') return `item_image_${name}`;
+    return `spell_image_${name}`;
+}
+
+function attachImageToEntry(entry, type) {
+    if (!entry?.name) return entry;
+    const img = localStorage.getItem(getEntryImageKey(type, entry.name));
+    if (img) return { ...entry, image: img };
+    return entry;
+}
+
+function attachImagesToEntries(entries, type) {
+    return entries.map((entry) => attachImageToEntry(entry, type));
+}
+
+function buildFullMonsterEntry(updates, { originalName = null } = {}) {
+    const lookupName = originalName || updates.name;
+    const existing = lookupName ? getMonsterByName(lookupName) : null;
+    let merged = { ...(existing || {}), ...updates };
+    if (updates.name) merged.name = updates.name;
+    merged = attachImageToEntry(merged, 'monster');
+    const sourceName = originalName || merged.name;
+    if (isBuiltInMonster(sourceName) && merged.name === sourceName) {
+        return preserveSourceBookMetadata(merged, 'monster');
+    }
+    return merged;
+}
+
+function buildFullItemEntry(updates, { originalName = null } = {}) {
+    const lookupName = originalName || updates.name;
+    const existing = lookupName ? getItemByName(lookupName) : null;
+    let merged = { ...(existing || {}), ...updates };
+    if (updates.name) merged.name = updates.name;
+    merged = attachImageToEntry(merged, 'item');
+    const sourceName = originalName || merged.name;
+    if (isBuiltInItem(sourceName) && merged.name === sourceName) {
+        return preserveSourceBookMetadata(merged, 'item');
+    }
+    return merged;
+}
+
+function buildFullSpellEntry(updates, { originalName = null } = {}) {
+    const lookupName = originalName || updates.name;
+    const existing = lookupName ? getSpellByName(lookupName) : null;
+    let merged = { ...(existing || {}), ...updates };
+    if (updates.name) merged.name = updates.name;
+    merged = attachImageToEntry(merged, 'spell');
+    const sourceName = originalName || merged.name;
+    if (isBuiltInSpell(sourceName) && merged.name === sourceName) {
+        return preserveSourceBookMetadata(merged, 'spell');
+    }
+    return merged;
+}
+
+function syncEntryImageToLibrary(entryName, imgSrc, type) {
+    localStorage.setItem(getEntryImageKey(type, entryName), imgSrc);
+    addUsedImageForEntry(entryName, imgSrc);
+    const builders = {
+        monster: buildFullMonsterEntry,
+        item: buildFullItemEntry,
+        spell: buildFullSpellEntry,
+    };
+    const savers = {
+        monster: saveMonsterEntry,
+        item: saveItemEntry,
+        spell: saveSpellEntry,
+    };
+    const existing = type === 'monster' ? getMonsterByName(entryName)
+        : type === 'item' ? getItemByName(entryName)
+        : getSpellByName(entryName);
+    if (existing) {
+        const full = builders[type]({ ...existing, image: imgSrc }, { originalName: entryName });
+        savers[type](full, { originalName: entryName });
+    } else {
+        saveToBackend();
+    }
+}
+
 function saveOverrideMonster(monster) {
     const list = getOverrideMonsters();
-    const entry = preserveSourceBookMetadata(monster, 'monster');
+    const entry = preserveSourceBookMetadata(attachImageToEntry(monster, 'monster'), 'monster');
     const index = list.findIndex(m => m.name === entry.name);
     if (index >= 0) list[index] = entry;
     else list.push(entry);
@@ -1470,7 +1550,7 @@ function saveOverrideMonster(monster) {
 }
 function saveOverrideItem(item) {
     const list = getOverrideItems();
-    const entry = preserveSourceBookMetadata(item, 'item');
+    const entry = preserveSourceBookMetadata(attachImageToEntry(item, 'item'), 'item');
     const index = list.findIndex(i => i.name === entry.name);
     if (index >= 0) list[index] = entry;
     else list.push(entry);
@@ -1483,7 +1563,7 @@ function saveOverrideItem(item) {
 }
 function saveOverrideSpell(spell) {
     const list = getOverrideSpells();
-    const entry = preserveSourceBookMetadata(spell, 'spell');
+    const entry = preserveSourceBookMetadata(attachImageToEntry(spell, 'spell'), 'spell');
     const index = list.findIndex(s => s.name === entry.name);
     if (index >= 0) list[index] = entry;
     else list.push(entry);
@@ -1496,25 +1576,28 @@ function saveOverrideSpell(spell) {
 }
 
 function saveMonsterEntry(monster, { originalName = null } = {}) {
-    const sourceName = originalName || monster.name;
-    if (isBuiltInMonster(sourceName) && monster.name === sourceName) {
-        return saveOverrideMonster(monster);
+    const full = buildFullMonsterEntry(monster, { originalName });
+    const sourceName = originalName || full.name;
+    if (isBuiltInMonster(sourceName) && full.name === sourceName) {
+        return saveOverrideMonster(full);
     }
-    return saveCustomMonster(monster);
+    return saveCustomMonster(full);
 }
 function saveItemEntry(item, { originalName = null } = {}) {
-    const sourceName = originalName || item.name;
-    if (isBuiltInItem(sourceName) && item.name === sourceName) {
-        return saveOverrideItem(item);
+    const full = buildFullItemEntry(item, { originalName });
+    const sourceName = originalName || full.name;
+    if (isBuiltInItem(sourceName) && full.name === sourceName) {
+        return saveOverrideItem(full);
     }
-    return saveCustomItem(item);
+    return saveCustomItem(full);
 }
 function saveSpellEntry(spell, { originalName = null } = {}) {
-    const sourceName = originalName || spell.name;
-    if (isBuiltInSpell(sourceName) && spell.name === sourceName) {
-        return saveOverrideSpell(spell);
+    const full = buildFullSpellEntry(spell, { originalName });
+    const sourceName = originalName || full.name;
+    if (isBuiltInSpell(sourceName) && full.name === sourceName) {
+        return saveOverrideSpell(full);
     }
-    return saveCustomSpell(spell);
+    return saveCustomSpell(full);
 }
 
 function getMonsterByName(name) {
@@ -1634,6 +1717,138 @@ function refreshUIAfterSync() {
     }
 }
 
+function combineRemoteOverrides(primary, legacy, type, remoteImages = {}) {
+    const map = new Map();
+    for (const entry of legacy || []) {
+        const normalized = preserveSourceBookMetadata(entry, type);
+        const key = getEntryImageKey(type, normalized.name);
+        const img = normalized.image || remoteImages[key];
+        map.set(normalized.name, img ? { ...normalized, image: img } : normalized);
+    }
+    for (const entry of primary || []) {
+        const normalized = preserveSourceBookMetadata(entry, type);
+        const key = getEntryImageKey(type, normalized.name);
+        const img = normalized.image || remoteImages[key];
+        map.set(normalized.name, img ? { ...normalized, image: img } : normalized);
+    }
+    return Array.from(map.values());
+}
+
+function enrichRemoteCustomEntries(entries, type, remoteImages = {}) {
+    return (entries || []).map((entry) => {
+        const key = getEntryImageKey(type, entry.name);
+        const img = entry.image || remoteImages[key];
+        return img ? { ...entry, image: img } : entry;
+    });
+}
+
+function applyRemoteSyncData(data) {
+    let changed = false;
+    const remoteImages = data.images || {};
+
+    const replaceStorage = (key, value) => {
+        const serialized = JSON.stringify(value);
+        if (localStorage.getItem(key) !== serialized) {
+            localStorage.setItem(key, serialized);
+            changed = true;
+        }
+    };
+
+    const remoteOverrideMonsters = combineRemoteOverrides(
+        data.overrideMonsters,
+        (data.monsters || []).filter((m) => isBuiltInMonster(m.name)),
+        'monster',
+        remoteImages
+    );
+    const remoteCustomMonsters = enrichRemoteCustomEntries(
+        (data.monsters || []).filter((m) => !isBuiltInMonster(m.name)),
+        'monster',
+        remoteImages
+    );
+    replaceStorage('dnd_extension_override_monsters', remoteOverrideMonsters);
+    replaceStorage('dnd_extension_custom_monsters', remoteCustomMonsters);
+
+    const remoteOverrideItems = combineRemoteOverrides(
+        data.overrideItems,
+        (data.items || []).filter((i) => isBuiltInItem(i.name)),
+        'item',
+        remoteImages
+    );
+    const remoteCustomItems = enrichRemoteCustomEntries(
+        (data.items || []).filter((i) => !isBuiltInItem(i.name)),
+        'item',
+        remoteImages
+    );
+    replaceStorage('dnd_extension_override_items', remoteOverrideItems);
+    replaceStorage('dnd_extension_custom_items', remoteCustomItems);
+
+    const remoteOverrideSpells = combineRemoteOverrides(
+        data.overrideSpells,
+        (data.spells || []).filter((s) => isBuiltInSpell(s.name)),
+        'spell',
+        remoteImages
+    );
+    const remoteCustomSpells = enrichRemoteCustomEntries(
+        (data.spells || []).filter((s) => !isBuiltInSpell(s.name)),
+        'spell',
+        remoteImages
+    );
+    replaceStorage('dnd_extension_override_spells', remoteOverrideSpells);
+    replaceStorage('dnd_extension_custom_spells', remoteCustomSpells);
+
+    const remoteDeleted = Array.isArray(data.deleted) ? data.deleted : [];
+    replaceStorage('dnd_extension_deleted_items', remoteDeleted);
+
+    const syncEntryImages = (entries, type) => {
+        for (const entry of entries) {
+            if (!entry?.name || !entry.image) continue;
+            const imgKey = getEntryImageKey(type, entry.name);
+            if (localStorage.getItem(imgKey) !== entry.image) {
+                localStorage.setItem(imgKey, entry.image);
+                changed = true;
+            }
+        }
+    };
+    syncEntryImages(remoteOverrideMonsters, 'monster');
+    syncEntryImages(remoteCustomMonsters, 'monster');
+    syncEntryImages(remoteOverrideItems, 'item');
+    syncEntryImages(remoteCustomItems, 'item');
+    syncEntryImages(remoteOverrideSpells, 'spell');
+    syncEntryImages(remoteCustomSpells, 'spell');
+
+    if (remoteImages && typeof remoteImages === 'object') {
+        for (const [key, val] of Object.entries(remoteImages)) {
+            if (localStorage.getItem(key) !== val) {
+                localStorage.setItem(key, val);
+                changed = true;
+            }
+        }
+    }
+
+    if (data.imagesData && typeof data.imagesData === 'object') {
+        for (const [key, val] of Object.entries(data.imagesData)) {
+            const dataKey = `${key}_data`;
+            if (localStorage.getItem(dataKey) !== val) {
+                localStorage.setItem(dataKey, val);
+                changed = true;
+            }
+        }
+    }
+
+    if (data.entryImages && typeof data.entryImages === 'object') {
+        for (const [name, urls] of Object.entries(data.entryImages)) {
+            const lsKey = `dnd_extension_entry_images_${name}`;
+            const serialized = JSON.stringify(urls);
+            if (localStorage.getItem(lsKey) !== serialized) {
+                localStorage.setItem(lsKey, serialized);
+                changed = true;
+            }
+        }
+    }
+
+    return changed;
+}
+
 async function syncWithBackend({ force = false } = {}) {
     if (syncInProgress) return false;
     syncInProgress = true;
@@ -1653,135 +1868,9 @@ async function syncWithBackend({ force = false } = {}) {
 
         const dataRes = await fetch(`${API_BASE}/data`);
         const data = await dataRes.json();
-        
-        const localMonsters = getCustomMonsters();
-        const localItems = getCustomItems();
-        const localSpells = getCustomSpells();
-        const localOverrideMonsters = getOverrideMonsters();
-        const localOverrideItems = getOverrideItems();
-        const localOverrideSpells = getOverrideSpells();
-        const localDeleted = getDeletedItems();
-        let changed = false;
 
-        const mergeList = (remoteList, localList, isOverride, type) => {
-            if (!Array.isArray(remoteList)) return;
-            remoteList.forEach(entry => {
-                const normalized = isOverride ? preserveSourceBookMetadata(entry, type) : entry;
-                const idx = localList.findIndex(item => item.name === normalized.name);
-                if (idx === -1) {
-                    localList.push(normalized);
-                    changed = true;
-                } else if (JSON.stringify(localList[idx]) !== JSON.stringify(normalized)) {
-                    localList[idx] = normalized;
-                    changed = true;
-                }
-            });
-        };
+        const changed = applyRemoteSyncData(data);
 
-        mergeList(data.overrideMonsters, localOverrideMonsters, true, 'monster');
-        mergeList(data.overrideItems, localOverrideItems, true, 'item');
-        mergeList(data.overrideSpells, localOverrideSpells, true, 'spell');
-        localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(localOverrideMonsters));
-        localStorage.setItem('dnd_extension_override_items', JSON.stringify(localOverrideItems));
-        localStorage.setItem('dnd_extension_override_spells', JSON.stringify(localOverrideSpells));
-
-        if (data.monsters && Array.isArray(data.monsters)) {
-            data.monsters.forEach(m => {
-                if (isBuiltInMonster(m.name)) {
-                    const idx = localOverrideMonsters.findIndex(item => item.name === m.name);
-                    const normalized = preserveSourceBookMetadata(m, 'monster');
-                    if (idx === -1) { localOverrideMonsters.push(normalized); changed = true; }
-                    else if (JSON.stringify(localOverrideMonsters[idx]) !== JSON.stringify(normalized)) {
-                        localOverrideMonsters[idx] = normalized;
-                        changed = true;
-                    }
-                } else {
-                    const idx = localMonsters.findIndex(lm => lm.name === m.name);
-                    if (idx === -1) { localMonsters.push(m); changed = true; }
-                    else if (JSON.stringify(localMonsters[idx]) !== JSON.stringify(m)) { localMonsters[idx] = m; changed = true; }
-                }
-            });
-            localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(localMonsters));
-            localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(localOverrideMonsters));
-        }
-        
-        if (data.items && Array.isArray(data.items)) {
-            data.items.forEach(i => {
-                if (isBuiltInItem(i.name)) {
-                    const idx = localOverrideItems.findIndex(item => item.name === i.name);
-                    const normalized = preserveSourceBookMetadata(i, 'item');
-                    if (idx === -1) { localOverrideItems.push(normalized); changed = true; }
-                    else if (JSON.stringify(localOverrideItems[idx]) !== JSON.stringify(normalized)) {
-                        localOverrideItems[idx] = normalized;
-                        changed = true;
-                    }
-                } else {
-                    const idx = localItems.findIndex(li => li.name === i.name);
-                    if (idx === -1) { localItems.push(i); changed = true; }
-                    else if (JSON.stringify(localItems[idx]) !== JSON.stringify(i)) { localItems[idx] = i; changed = true; }
-                }
-            });
-            localStorage.setItem('dnd_extension_custom_items', JSON.stringify(localItems));
-            localStorage.setItem('dnd_extension_override_items', JSON.stringify(localOverrideItems));
-        }
-
-        if (data.spells && Array.isArray(data.spells)) {
-            data.spells.forEach(s => {
-                if (isBuiltInSpell(s.name)) {
-                    const idx = localOverrideSpells.findIndex(item => item.name === s.name);
-                    const normalized = preserveSourceBookMetadata(s, 'spell');
-                    if (idx === -1) { localOverrideSpells.push(normalized); changed = true; }
-                    else if (JSON.stringify(localOverrideSpells[idx]) !== JSON.stringify(normalized)) {
-                        localOverrideSpells[idx] = normalized;
-                        changed = true;
-                    }
-                } else {
-                    const idx = localSpells.findIndex(ls => ls.name === s.name);
-                    if (idx === -1) { localSpells.push(s); changed = true; }
-                    else if (JSON.stringify(localSpells[idx]) !== JSON.stringify(s)) { localSpells[idx] = s; changed = true; }
-                }
-            });
-            localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(localSpells));
-            localStorage.setItem('dnd_extension_override_spells', JSON.stringify(localOverrideSpells));
-        }
-
-        if (data.deleted && Array.isArray(data.deleted)) {
-            data.deleted.forEach(d => {
-                if (!localDeleted.includes(d)) { localDeleted.push(d); changed = true; }
-            });
-            if (changed) localStorage.setItem('dnd_extension_deleted_items', JSON.stringify(localDeleted));
-        }
-
-        if (data.images && typeof data.images === 'object') {
-            for (const [key, val] of Object.entries(data.images)) {
-                if (localStorage.getItem(key) !== val) {
-                    localStorage.setItem(key, val);
-                    changed = true;
-                }
-            }
-        }
-
-        if (data.imagesData && typeof data.imagesData === 'object') {
-            for (const [key, val] of Object.entries(data.imagesData)) {
-                const dataKey = `${key}_data`;
-                if (localStorage.getItem(dataKey) !== val) {
-                    localStorage.setItem(dataKey, val);
-                    changed = true;
-                }
-            }
-        }
-
-        if (data.entryImages && typeof data.entryImages === 'object') {
-            for (const [name, urls] of Object.entries(data.entryImages)) {
-                const lsKey = `dnd_extension_entry_images_${name}`;
-                const serialized = JSON.stringify(urls);
-                if (localStorage.getItem(lsKey) !== serialized) {
-                    localStorage.setItem(lsKey, serialized);
-                    changed = true;
-                }
-            }
-        }
-        
         if (data.lastUpdated) {
             setLastSyncedAt(data.lastUpdated);
         }
@@ -1841,66 +1930,100 @@ function startRealtimeSync() {
     }, 15000);
 }
 
-async function saveToBackend() {
-    try {
-        const monsters = getCustomMonsters();
-        const items = getCustomItems();
-        const spells = getCustomSpells();
-        const overrideMonsters = getOverrideMonsters();
-        const overrideItems = getOverrideItems();
-        const overrideSpells = getOverrideSpells();
-        const deleted = getDeletedItems();
-        
-        // Collect images from localStorage
-        const images = {};
-        const imagesData = {};
-        const entryImages = {};
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_'))) {
-                images[key] = localStorage.getItem(key);
-            }
-            // Backup raw data for persistence
-            if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && key.endsWith('_data')) {
-                imagesData[key.replace('_data', '')] = localStorage.getItem(key);
-            }
-            if (key && key.startsWith('dnd_extension_entry_images_')) {
-                const name = key.replace('dnd_extension_entry_images_', '');
-                try {
-                    entryImages[name] = JSON.parse(localStorage.getItem(key) || '[]');
-                } catch (e) { /* ignore */ }
-            }
-        }
+let saveToBackendQueue = Promise.resolve();
 
-        const res = await fetch(`${API_BASE}/data`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                monsters, items, spells,
-                overrideMonsters, overrideItems, overrideSpells,
-                deleted, images, imagesData, entryImages,
-            })
-        });
-        if (res.ok) {
-            const result = await res.json();
-            if (result.lastUpdated) {
+function collectBackendPayload() {
+    const monsters = getCustomMonsters();
+    const items = getCustomItems();
+    const spells = getCustomSpells();
+    const overrideMonsters = getOverrideMonsters();
+    const overrideItems = getOverrideItems();
+    const overrideSpells = getOverrideSpells();
+    const deleted = getDeletedItems();
+
+    const images = {};
+    const imagesData = {};
+    const entryImages = {};
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_'))) {
+            images[key] = localStorage.getItem(key);
+        }
+        if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && key.endsWith('_data')) {
+            imagesData[key.replace('_data', '')] = localStorage.getItem(key);
+        }
+        if (key && key.startsWith('dnd_extension_entry_images_')) {
+            const name = key.replace('dnd_extension_entry_images_', '');
+            try {
+                entryImages[name] = JSON.parse(localStorage.getItem(key) || '[]');
+            } catch (e) { /* ignore */ }
+        }
+    }
+
+    return {
+        monsters: attachImagesToEntries(monsters, 'monster'),
+        items: attachImagesToEntries(items, 'item'),
+        spells: attachImagesToEntries(spells, 'spell'),
+        overrideMonsters: attachImagesToEntries(overrideMonsters, 'monster'),
+        overrideItems: attachImagesToEntries(overrideItems, 'item'),
+        overrideSpells: attachImagesToEntries(overrideSpells, 'spell'),
+        deleted, images, imagesData, entryImages,
+    };
+}
+
+async function flushSaveToBackend() {
+    const payload = collectBackendPayload();
+    const res = await fetch(`${API_BASE}/data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+        const result = await res.json();
+        if (result.lastUpdated) {
+            const incoming = new Date(result.lastUpdated).getTime();
+            const current = getLastSyncedAt() ? new Date(getLastSyncedAt()).getTime() : 0;
+            if (incoming >= current) {
                 setLastSyncedAt(result.lastUpdated);
             }
         }
-    } catch (e) {
-        // Silent fail
+        return;
     }
+
+    let details = res.statusText;
+    try {
+        const errBody = await res.json();
+        details = errBody.error || details;
+    } catch (e) { /* ignore */ }
+    console.warn(`Backend save failed (${res.status}): ${details}`, {
+        overrideMonsters: payload.overrideMonsters.length,
+        overrideItems: payload.overrideItems.length,
+        overrideSpells: payload.overrideSpells.length,
+        customMonsters: payload.monsters.length,
+        imageKeys: Object.keys(payload.images).length,
+    });
+}
+
+function saveToBackend() {
+    saveToBackendQueue = saveToBackendQueue
+        .then(() => flushSaveToBackend())
+        .catch((e) => {
+            console.warn('Backend save failed:', e);
+        });
+    return saveToBackendQueue;
 }
 
 function saveCustomMonster(monster) {
     try {
+        const entry = attachImageToEntry(monster, 'monster');
         const list = getCustomMonsters();
-        const index = list.findIndex(m => m.name === monster.name);
-        if (index >= 0) list[index] = monster;
-        else list.push(monster);
+        const index = list.findIndex(m => m.name === entry.name);
+        if (index >= 0) list[index] = entry;
+        else list.push(entry);
         localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(list));
         saveToBackend(); // Sync to backend
-        restoreItem(monster.name);
+        restoreItem(entry.name);
         return true;
     } catch (e) {
         console.error("Failed to save custom monster:", e);
@@ -1914,13 +2037,14 @@ function saveCustomMonster(monster) {
 }
 function saveCustomItem(item) {
     try {
+        const entry = attachImageToEntry(item, 'item');
         const list = getCustomItems();
-        const index = list.findIndex(i => i.name === item.name);
-        if (index >= 0) list[index] = item;
-        else list.push(item);
+        const index = list.findIndex(i => i.name === entry.name);
+        if (index >= 0) list[index] = entry;
+        else list.push(entry);
         localStorage.setItem('dnd_extension_custom_items', JSON.stringify(list));
         saveToBackend();
-        restoreItem(item.name);
+        restoreItem(entry.name);
         return true;
     } catch (e) {
         console.error("Failed to save custom item:", e);
@@ -1935,13 +2059,14 @@ function saveCustomItem(item) {
 
 function saveCustomSpell(spell) {
     try {
+        const entry = attachImageToEntry(spell, 'spell');
         const list = getCustomSpells();
-        const index = list.findIndex(s => s.name === spell.name);
-        if (index >= 0) list[index] = spell;
-        else list.push(spell);
+        const index = list.findIndex(s => s.name === entry.name);
+        if (index >= 0) list[index] = entry;
+        else list.push(entry);
         localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(list));
         saveToBackend();
-        restoreItem(spell.name);
+        restoreItem(entry.name);
         return true;
     } catch (e) {
         console.error("Failed to save custom spell:", e);
@@ -4011,7 +4136,7 @@ export function searchItems(query) {
       }
 
       if (editorMode === 'monster') {
-          const newMonster = {
+          const newMonster = buildFullMonsterEntry({
               name: name,
               hp: parseInt(editorHp.value) || 0,
               ac: parseInt(editorAc.value) || 10,
@@ -4027,10 +4152,8 @@ export function searchItems(query) {
               damageResistances: lastParsedStatBlock?.damageResistances,
               damageImmunities: lastParsedStatBlock?.damageImmunities,
               conditionImmunities: lastParsedStatBlock?.conditionImmunities,
-              // Backup: Save image in object if it's short (not Base64) or if we want to force it
-              // We only save it in the object if it's NOT a huge data URI, to prevent bloating the main list
               image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
-          };
+          }, { originalName: editorOriginalName });
           if (!saveMonsterEntry(newMonster, { originalName: editorOriginalName })) return;
 
           // Sync Library -> Tokens: Update existing OBR tokens for this monster
@@ -4097,24 +4220,24 @@ export function searchItems(query) {
           const aoeType = editorSpellShape.value;
           const aoeSize = parseInt(editorSpellSize.value);
           
-          const newSpell = {
+          const newSpell = buildFullSpellEntry({
               name: name,
               level: parseInt(editorSpellLevel.value) || 0,
               school: editorSpellSchool.value,
               description: editorSpellDesc.value,
               source: editorOriginalSource || (isBuiltInSpell(editorOriginalName || name) ? SPELL_DATA[editorOriginalName || name]?.source : null) || "Custom",
               aoe: (aoeType && aoeSize) ? { type: aoeType, size: aoeSize } : undefined
-          };
+          }, { originalName: editorOriginalName });
           if (!saveSpellEntry(newSpell, { originalName: editorOriginalName })) return;
       } else {
-          const newItem = {
+          const newItem = buildFullItemEntry({
               name: name,
               type: editorItemType.value,
               rarity: editorRarity.value,
               description: editorItemDesc.value,
               source: editorOriginalSource || (isBuiltInItem(editorOriginalName || name) ? items.find(i => i.name === (editorOriginalName || name))?.source : null) || "Custom",
               image: (newImgUrl && !newImgUrl.startsWith('data:')) ? newImgUrl : undefined
-          };
+          }, { originalName: editorOriginalName });
           if (!saveItemEntry(newItem, { originalName: editorOriginalName })) return;
       }
       
@@ -4925,9 +5048,12 @@ export function searchItems(query) {
           }
           
           try {
-            localStorage.setItem(`monster_image_${entryName}`, imgSrc);
-            addUsedImageForEntry(entryName, imgSrc);
-            saveToBackend();
+            const entryType = statsContent.dataset.isSpell === 'true'
+                ? 'spell'
+                : statsContent.dataset.isItem === 'true'
+                    ? 'item'
+                    : 'monster';
+            syncEntryImageToLibrary(entryName, imgSrc, entryType);
           } catch (storageErr) {
             console.warn("Failed to save image to localStorage (Quota Exceeded?):", storageErr);
           }
@@ -6766,9 +6892,7 @@ export function searchItems(query) {
 
                         // 3. Save this image association for future adds of this monster
                         const safeUrl = await ensureShortImageUrl(selectedItem.image.url);
-                        localStorage.setItem(`monster_image_${monster.name}`, safeUrl);
-                        addUsedImageForEntry(monster.name, safeUrl);
-                        saveToBackend(); // Sync to backend immediately
+                        syncEntryImageToLibrary(monster.name, safeUrl, 'monster');
 
                         // 4. Update the item
                         await OBR.scene.items.updateItems([selectedItem.id], (items) => {
