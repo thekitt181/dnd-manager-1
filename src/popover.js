@@ -1574,14 +1574,97 @@ function migrateEntryAssets(type, oldName, newName) {
     }
 }
 
+function hideSourceBookOriginal(type, originName) {
+    if (!originName || !isSourceBookEntry(originName, type)) return false;
+    const builtIn = findBuiltInOrigin(type, originName);
+    const canonical = builtIn?.name || normalizeEntryName(originName);
+    const list = getDeletedItems();
+    if (list.some((d) => namesMatch(d, canonical))) return false;
+    list.push(canonical);
+    localStorage.setItem('dnd_extension_deleted_items', JSON.stringify(list));
+    return true;
+}
+
+function ensureOverrideHidesBuiltIn(type, entry, originName = null) {
+    let hidden = false;
+    const origins = new Set();
+    if (entry?.originBookName) origins.add(entry.originBookName);
+    if (originName) origins.add(originName);
+    for (const origin of origins) {
+        if (hideSourceBookOriginal(type, origin)) hidden = true;
+    }
+    return hidden;
+}
+
 function handleSourceBookRename(type, oldName, newName) {
     if (!oldName || !newName || namesMatch(oldName, newName)) return;
-    if (isSourceBookEntry(oldName, type)) {
-        deleteItem(oldName);
-    }
+    hideSourceBookOriginal(type, oldName);
     removeFromEntryList(type, oldName, 'override');
     removeFromEntryList(type, oldName, 'custom');
     migrateEntryAssets(type, oldName, newName);
+}
+
+function getBuiltInList(type) {
+    if (type === 'monster') return monsters;
+    if (type === 'item') return items;
+    return Object.entries(SPELL_DATA).map(([name, data]) => ({ name, ...data }));
+}
+
+function guessBuiltInOriginForOverride(override, type) {
+    if (override.originBookName) return override.originBookName;
+    const builtIns = getBuiltInList(type);
+    const deleted = getDeletedItems();
+    const overrideName = normalizeEntryName(override.name).toLowerCase().replace(/[,.\s]+$/g, '').trim();
+    if (!override.source) return null;
+
+    const candidates = builtIns.filter((builtIn) => {
+        if (builtIn.source !== override.source) return false;
+        if (namesMatch(builtIn.name, override.name)) return false;
+        if (deleted.some((d) => namesMatch(d, builtIn.name))) return false;
+        const typeHint = normalizeEntryName(builtIn.type || '').toLowerCase();
+        if (!typeHint) return false;
+        const primaryName = typeHint.split('*')[0].trim();
+        if (primaryName.length < 4) return false;
+        return overrideName.includes(primaryName) || primaryName.includes(overrideName);
+    });
+
+    return candidates.length === 1 ? candidates[0].name : null;
+}
+
+function repairRenamedSourceBookOverrides({ save = true } = {}) {
+    let changed = false;
+    const storageKeys = {
+        monster: 'dnd_extension_override_monsters',
+        item: 'dnd_extension_override_items',
+        spell: 'dnd_extension_override_spells',
+    };
+
+    for (const type of ['monster', 'item', 'spell']) {
+        const list = getOverrideList(type);
+        let listChanged = false;
+        for (let i = 0; i < list.length; i++) {
+            const entry = list[i];
+            const guessed = entry.originBookName || guessBuiltInOriginForOverride(entry, type);
+            if (!guessed) continue;
+            const normalized = preserveSourceBookMetadata(
+                { ...entry, originBookName: normalizeEntryName(guessed) },
+                type,
+                guessed
+            );
+            if (JSON.stringify(normalized) !== JSON.stringify(list[i])) {
+                list[i] = normalized;
+                listChanged = true;
+            }
+            if (hideSourceBookOriginal(type, guessed)) changed = true;
+        }
+        if (listChanged) {
+            localStorage.setItem(storageKeys[type], JSON.stringify(list));
+            changed = true;
+        }
+    }
+
+    if (changed && save) saveToBackend();
+    return changed;
 }
 
 function getEntryImageKey(type, name) {
@@ -1673,8 +1756,10 @@ function saveOverrideMonster(monster, { originName = null } = {}) {
     localStorage.setItem('dnd_extension_override_monsters', JSON.stringify(list));
     const customs = getCustomMonsters().filter((m) => !namesMatch(m.name, entry.name));
     localStorage.setItem('dnd_extension_custom_monsters', JSON.stringify(customs));
+    ensureOverrideHidesBuiltIn('monster', entry, originName);
     saveToBackend();
     reconcileCustomAndOverrides({ save: false });
+    repairRenamedSourceBookOverrides({ save: false });
     restoreItem(entry.name);
     return true;
 }
@@ -1687,8 +1772,10 @@ function saveOverrideItem(item, { originName = null } = {}) {
     localStorage.setItem('dnd_extension_override_items', JSON.stringify(list));
     const customs = getCustomItems().filter((i) => !namesMatch(i.name, entry.name));
     localStorage.setItem('dnd_extension_custom_items', JSON.stringify(customs));
+    ensureOverrideHidesBuiltIn('item', entry, originName);
     saveToBackend();
     reconcileCustomAndOverrides({ save: false });
+    repairRenamedSourceBookOverrides({ save: false });
     restoreItem(entry.name);
     return true;
 }
@@ -1701,19 +1788,28 @@ function saveOverrideSpell(spell, { originName = null } = {}) {
     localStorage.setItem('dnd_extension_override_spells', JSON.stringify(list));
     const customs = getCustomSpells().filter((s) => !namesMatch(s.name, entry.name));
     localStorage.setItem('dnd_extension_custom_spells', JSON.stringify(customs));
+    ensureOverrideHidesBuiltIn('spell', entry, originName);
     saveToBackend();
     reconcileCustomAndOverrides({ save: false });
+    repairRenamedSourceBookOverrides({ save: false });
     restoreItem(entry.name);
     return true;
+}
+
+function resolveRenameFromName(type, originalName, entryName, bookKey = null) {
+    return [originalName, bookKey].find((name) =>
+        name &&
+        !namesMatch(name, entryName) &&
+        (isSourceBookEntry(name, type) || isOverrideEntry(name, type))
+    ) || null;
 }
 
 function saveMonsterEntry(monster, { originalName = null, bookKey = null } = {}) {
     const key = effectiveBookKey('monster', originalName, monster.name, bookKey);
     const full = buildFullMonsterEntry(monster, { originalName, bookKey: key });
     if (shouldSaveAsOverride('monster', originalName, full.name, key)) {
-        if (originalName && !namesMatch(originalName, full.name)) {
-            handleSourceBookRename('monster', originalName, full.name);
-        }
+        const renameFrom = resolveRenameFromName('monster', originalName, full.name, key);
+        if (renameFrom) handleSourceBookRename('monster', renameFrom, full.name);
         const originName = effectiveBookKey('monster', originalName, full.name, key);
         return saveOverrideMonster(full, { originName });
     }
@@ -1723,9 +1819,8 @@ function saveItemEntry(item, { originalName = null, bookKey = null } = {}) {
     const key = effectiveBookKey('item', originalName, item.name, bookKey);
     const full = buildFullItemEntry(item, { originalName, bookKey: key });
     if (shouldSaveAsOverride('item', originalName, full.name, key)) {
-        if (originalName && !namesMatch(originalName, full.name)) {
-            handleSourceBookRename('item', originalName, full.name);
-        }
+        const renameFrom = resolveRenameFromName('item', originalName, full.name, key);
+        if (renameFrom) handleSourceBookRename('item', renameFrom, full.name);
         const originName = effectiveBookKey('item', originalName, full.name, key);
         return saveOverrideItem(full, { originName });
     }
@@ -1735,9 +1830,8 @@ function saveSpellEntry(spell, { originalName = null, bookKey = null } = {}) {
     const key = effectiveBookKey('spell', originalName, spell.name, bookKey);
     const full = buildFullSpellEntry(spell, { originalName, bookKey: key });
     if (shouldSaveAsOverride('spell', originalName, full.name, key)) {
-        if (originalName && !namesMatch(originalName, full.name)) {
-            handleSourceBookRename('spell', originalName, full.name);
-        }
+        const renameFrom = resolveRenameFromName('spell', originalName, full.name, key);
+        if (renameFrom) handleSourceBookRename('spell', renameFrom, full.name);
         const originName = effectiveBookKey('spell', originalName, full.name, key);
         return saveOverrideSpell(full, { originName });
     }
@@ -1770,12 +1864,17 @@ function getSpellByName(name) {
 }
 
 function mergeSourceBookEntries(builtIns, overrides, deleted) {
-    const overriddenBuiltIn = (builtInName) => overrides.some((o) =>
-        namesMatch(o.name, builtInName) ||
-        (o.originBookName && namesMatch(o.originBookName, builtInName))
+    const isHiddenBuiltIn = (builtInName) =>
+        overrides.some((o) =>
+            namesMatch(o.name, builtInName) ||
+            (o.originBookName && namesMatch(o.originBookName, builtInName))
+        ) ||
+        deleted.some((d) => namesMatch(d, builtInName));
+
+    const activeBuiltIns = builtIns.filter((entry) => !isHiddenBuiltIn(entry.name));
+    return [...activeBuiltIns, ...overrides].filter(
+        (entry) => !deleted.some((d) => namesMatch(d, entry.name))
     );
-    const activeBuiltIns = builtIns.filter((entry) => !overriddenBuiltIn(entry.name));
-    return [...activeBuiltIns, ...overrides].filter((entry) => !deleted.some((d) => namesMatch(d, entry.name)));
 }
 
 function migrateLegacyOverrides() {
@@ -1863,11 +1962,12 @@ function reconcileCustomAndOverrides({ save = true } = {}) {
 }
 
 reconcileCustomAndOverrides();
+repairRenamedSourceBookOverrides({ save: false });
 
 function restoreItem(name) {
      try {
          let list = JSON.parse(localStorage.getItem('dnd_extension_deleted_items') || '[]');
-         const idx = list.indexOf(name);
+         const idx = list.findIndex((d) => namesMatch(d, name));
          if (idx !== -1) {
              list.splice(idx, 1);
              localStorage.setItem('dnd_extension_deleted_items', JSON.stringify(list));
@@ -2060,6 +2160,7 @@ function applyRemoteSyncData(data) {
     }
 
     reconcileCustomAndOverrides({ save: false });
+    if (repairRenamedSourceBookOverrides({ save: false })) changed = true;
     return changed;
 }
 
@@ -3465,9 +3566,14 @@ const getImageDimensions = (src) => {
 
 
 function deleteItem(name) {
+    if (hideSourceBookOriginal('monster', name) || hideSourceBookOriginal('item', name) || hideSourceBookOriginal('spell', name)) {
+        saveToBackend();
+        return;
+    }
     const list = getDeletedItems();
-    if (!list.includes(name)) {
-        list.push(name);
+    const normalized = normalizeEntryName(name);
+    if (!list.some((d) => namesMatch(d, normalized))) {
+        list.push(normalized);
         localStorage.setItem('dnd_extension_deleted_items', JSON.stringify(list));
         saveToBackend();
     }
