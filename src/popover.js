@@ -2184,6 +2184,10 @@ const LAST_SYNCED_KEY = 'dnd_extension_last_synced';
 let realtimeSyncStarted = false;
 let realtimeEventSource = null;
 let realtimePollTimer = null;
+let sseReconnectTimer = null;
+let sseReconnectAttempt = 0;
+const REALTIME_POLL_MS = 3000;
+const SSE_MAX_BACKOFF_MS = 30000;
 let syncInProgress = false;
 let onSyncUIRefresh = null;
 
@@ -2414,30 +2418,56 @@ async function handleRemoteDataUpdate(remoteLastUpdated) {
     await syncWithBackend({ force: true });
 }
 
+function scheduleSseReconnect() {
+    if (sseReconnectTimer) return;
+    const delay = Math.min(1000 * Math.pow(2, sseReconnectAttempt), SSE_MAX_BACKOFF_MS);
+    sseReconnectAttempt += 1;
+    sseReconnectTimer = setTimeout(() => {
+        sseReconnectTimer = null;
+        connectRealtimeStream();
+    }, delay);
+}
+
+function connectRealtimeStream() {
+    if (typeof EventSource === 'undefined') return;
+    if (realtimeEventSource) {
+        realtimeEventSource.close();
+        realtimeEventSource = null;
+    }
+    try {
+        realtimeEventSource = new EventSource(`${API_BASE}/data/stream`);
+        realtimeEventSource.onopen = () => {
+            sseReconnectAttempt = 0;
+        };
+        realtimeEventSource.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload.type === 'update') {
+                    handleRemoteDataUpdate(payload.lastUpdated);
+                }
+            } catch (e) {
+                console.warn('Failed to parse realtime sync event:', e);
+            }
+        };
+        realtimeEventSource.onerror = () => {
+            console.warn('Realtime sync stream disconnected, reconnecting...');
+            if (realtimeEventSource) {
+                realtimeEventSource.close();
+                realtimeEventSource = null;
+            }
+            scheduleSseReconnect();
+        };
+    } catch (e) {
+        console.warn('Realtime sync unavailable, using polling fallback:', e);
+        scheduleSseReconnect();
+    }
+}
+
 function startRealtimeSync() {
     if (realtimeSyncStarted) return;
     realtimeSyncStarted = true;
 
-    if (typeof EventSource !== 'undefined') {
-        try {
-            realtimeEventSource = new EventSource(`${API_BASE}/data/stream`);
-            realtimeEventSource.onmessage = (event) => {
-                try {
-                    const payload = JSON.parse(event.data);
-                    if (payload.type === 'update') {
-                        handleRemoteDataUpdate(payload.lastUpdated);
-                    }
-                } catch (e) {
-                    console.warn('Failed to parse realtime sync event:', e);
-                }
-            };
-            realtimeEventSource.onerror = () => {
-                console.warn('Realtime sync stream disconnected, using polling fallback');
-            };
-        } catch (e) {
-            console.warn('Realtime sync unavailable, using polling fallback:', e);
-        }
-    }
+    connectRealtimeStream();
 
     realtimePollTimer = setInterval(async () => {
         try {
@@ -2448,7 +2478,16 @@ function startRealtimeSync() {
         } catch (e) {
             // Ignore polling errors when offline
         }
-    }, 15000);
+    }, REALTIME_POLL_MS);
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            void syncWithBackend();
+        }
+    });
+    window.addEventListener('focus', () => {
+        void syncWithBackend();
+    });
 }
 
 let saveToBackendQueue = Promise.resolve();
@@ -2464,11 +2503,17 @@ function collectBackendPayload() {
     const deleted = snapshot.deleted;
 
     const images = {};
+    const imagesData = {};
     const entryImages = {};
     for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && !key.endsWith('_data')) {
             images[key] = localStorage.getItem(key);
+        }
+        if (key && (key.startsWith('monster_image_') || key.startsWith('item_image_') || key.startsWith('spell_image_')) && key.endsWith('_data')) {
+            const baseKey = key.slice(0, -5);
+            const blob = localStorage.getItem(key);
+            if (blob) imagesData[baseKey] = blob;
         }
         if (key && key.startsWith('dnd_extension_entry_images_')) {
             const name = key.replace('dnd_extension_entry_images_', '');
@@ -2501,6 +2546,7 @@ function collectBackendPayload() {
         overrideSpells: enrichedOverrideSpells,
         deleted,
         images,
+        imagesData,
         entryImages,
         extractedMonsters: getExtractedMonstersFromGlobal(),
         extractedItems: getExtractedItemsFromGlobal(),
@@ -2508,12 +2554,21 @@ function collectBackendPayload() {
 }
 
 async function flushSaveToBackend() {
-    const payload = collectBackendPayload();
+    const payload = {
+        ...collectBackendPayload(),
+        clientLastSynced: getLastSyncedAt(),
+    };
     const res = await fetch(`${API_BASE}/data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
     });
+
+    if (res.status === 409) {
+        console.warn('Backend has newer data — pulling latest before retry');
+        await syncWithBackend({ force: true });
+        return;
+    }
 
     if (res.ok) {
         const result = await res.json();
@@ -7736,8 +7791,22 @@ export function searchItems(query) {
   };
 
   onSyncUIRefresh = () => {
-    const searchView = document.getElementById('search-view');
-    if (searchView && searchView.style.display !== 'none') {
+    const statsViewEl = document.getElementById('stats-view');
+    const statsContentEl = document.getElementById('stats-content');
+    if (statsViewEl && statsViewEl.style.display !== 'none' && statsContentEl?.dataset.entryName) {
+      const name = statsContentEl.dataset.entryName;
+      const isItem = statsContentEl.dataset.isItem === 'true';
+      const isSpell = statsContentEl.dataset.isSpell === 'true';
+      const itemId = statsContentEl.dataset.itemId || '';
+      let entry = null;
+      if (isSpell) entry = getSpellByName(name);
+      else if (isItem) entry = getItemByName(name);
+      else entry = getMonsterByName(name);
+      if (entry) showStats(entry, itemId || undefined);
+    }
+
+    const searchViewEl = document.getElementById('search-view');
+    if (searchViewEl && searchViewEl.style.display !== 'none') {
       renderResults(input.value);
     }
   };

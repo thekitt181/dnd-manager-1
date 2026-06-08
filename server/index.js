@@ -379,6 +379,19 @@ app.get('/api/data/stream', (req, res) => {
     });
 });
 
+app.post('/api/data/notify', async (req, res) => {
+    try {
+        const lastUpdated = req.body?.lastUpdated || new Date();
+        broadcastDataUpdate(lastUpdated);
+        res.json({
+            success: true,
+            lastUpdated: new Date(lastUpdated).toISOString(),
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/data', async (req, res) => {
     try {
         const {
@@ -386,13 +399,26 @@ app.post('/api/data', async (req, res) => {
             overrideMonsters, overrideItems, overrideSpells,
             deleted, images, imagesData, entryImages,
             extractedMonsters, extractedItems,
+            clientLastSynced,
         } = req.body;
         // Validate basic structure
         if (!Array.isArray(monsters) || !Array.isArray(items)) {
             return res.status(400).json({ error: 'Invalid data format' });
         }
-        
-        const saved = await saveData({
+
+        const existing = await getData();
+        if (clientLastSynced && existing?.lastUpdated) {
+            const clientTs = new Date(clientLastSynced).getTime();
+            const serverTs = new Date(existing.lastUpdated).getTime();
+            if (Number.isFinite(clientTs) && Number.isFinite(serverTs) && clientTs < serverTs) {
+                return res.status(409).json({
+                    error: 'stale',
+                    lastUpdated: new Date(existing.lastUpdated).toISOString(),
+                });
+            }
+        }
+
+        const savePayload = {
             monsters,
             items,
             spells: Array.isArray(spells) ? spells : [],
@@ -401,11 +427,15 @@ app.post('/api/data', async (req, res) => {
             overrideSpells: Array.isArray(overrideSpells) ? overrideSpells : [],
             deleted: deleted || [],
             images: images || {},
-            imagesData: imagesData || {},
             entryImages: entryImages || {},
             extractedMonsters: Array.isArray(extractedMonsters) ? extractedMonsters : [],
             extractedItems: Array.isArray(extractedItems) ? extractedItems : [],
-        });
+        };
+        if (imagesData !== undefined) {
+            savePayload.imagesData = imagesData;
+        }
+
+        const saved = await saveData(savePayload);
         res.json({
             success: true,
             lastUpdated: saved.lastUpdated ? new Date(saved.lastUpdated).toISOString() : null,
