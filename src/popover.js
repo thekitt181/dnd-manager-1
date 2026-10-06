@@ -16,7 +16,7 @@ window.addEventListener('error', (event) => {
     el.textContent = `Error:\n${event.message}\n${stack}`;
 });
 
-const EXTENSION_VERSION = "1.4"; // Version indicator for debugging
+const EXTENSION_VERSION = "1.5"; // Version indicator for debugging
 const CHANNEL_ID = 'com.dnd-extension.rolls';
 
 let spawnPosition = null; // Global spawn position from URL params
@@ -2810,6 +2810,22 @@ function isSameOriginUrl(url) {
     }
 }
 
+function toAbsoluteUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+    if (url.startsWith('data:') || url.startsWith('blob:') || /^https?:\/\//i.test(url)) return url;
+    try {
+        return new URL(url, window.location.href).href;
+    } catch (e) {
+        return url;
+    }
+}
+
+function isHostedImageUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    if (extractStaticImageKey(url)) return true;
+    return /^https?:\/\//i.test(url) && !url.startsWith('data:');
+}
+
 function resolveImageSrcForLoading(src) {
     if (!src || typeof src !== 'string') return src;
     const key = extractStaticImageKey(src);
@@ -2871,9 +2887,10 @@ function addUsedImageForEntry(entryName, url) {
 }
 
 // Helper to ensure image URL is within OBR limits (2048 chars) by uploading Base64 to local server if needed
-async function ensureShortImageUrl(url, name = null, folder = null) {
+async function ensureShortImageUrl(url, name = null, folder = null, options = {}) {
     if (!url) return url;
     if (typeof url !== 'string') return null;
+    const processBackground = options.processBackground !== false;
     
     // Basic cleanup
     url = url.trim();
@@ -2884,12 +2901,20 @@ async function ensureShortImageUrl(url, name = null, folder = null) {
         return null;
     }
 
-    // Always try to remove background first!
-    try {
-        console.log('Removing background for stored/processed image...');
-        url = await processAndRemoveBackground(url);
-    } catch (bgError) {
-        console.warn('Background removal failed, using original:', bgError);
+    // Already a short hosted URL — Owlbear can fetch this directly. Don't reprocess
+    // or we risk replacing a working image with a placeholder on timeout.
+    if (isHostedImageUrl(url) && !processBackground) {
+        return toAbsoluteUrl(url);
+    }
+
+    // Always try to remove background first when saving a new image
+    if (processBackground) {
+        try {
+            console.log('Removing background for stored/processed image...');
+            url = await processAndRemoveBackground(url);
+        } catch (bgError) {
+            console.warn('Background removal failed, using original:', bgError);
+        }
     }
 
     // Remove whitespace from Data URIs (newlines/spaces can break fetch/OBR)
@@ -2967,23 +2992,28 @@ async function preferLocalDataUriForObr(url, name, folder) {
     return url;
 }
 
-// Helper to generate a dynamic placeholder image (SVG Data URI)
+// Helper to generate a dynamic placeholder image (PNG — Owlbear often fails to render SVG data URIs)
 function getPlaceholderImage(name, type = 'monster') {
     const letter = name ? name.charAt(0).toUpperCase() : '?';
-    const color1 = type === 'monster' ? '#ff6b6b' : '#4a235a'; // Red for monsters, Purple for items
+    const color1 = type === 'monster' ? '#ff6b6b' : '#4a235a';
     const color2 = type === 'monster' ? '#8b0000' : '#1a1025';
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs>
-    <radialGradient id="grad1" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-      <stop offset="0%" style="stop-color:${color1};stop-opacity:1" />
-      <stop offset="100%" style="stop-color:${color2};stop-opacity:1" />
-    </radialGradient>
-  </defs>
-  <circle cx="256" cy="256" r="250" fill="url(#grad1)" />
-  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="250" fill="white" font-family="Arial">${letter}</text>
-</svg>`;
-    return "data:image/svg+xml;base64," + btoa(svg);
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createRadialGradient(128, 128, 20, 128, 128, 128);
+    gradient.addColorStop(0, color1);
+    gradient.addColorStop(1, color2);
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(128, 128, 124, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 140px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(letter, 128, 140);
+    return canvas.toDataURL('image/png');
 }
 
 export async function addMonsterToScene(monster) {
@@ -3001,49 +3031,9 @@ export async function addMonsterToScene(monster) {
       console.warn("Invalid/Corrupt monster image URL detected. Resetting to default.");
       imageUrl = null;
   }
-  
-  // Helper to check if image exists with a timeout to avoid hanging
-  const checkImage = (url, timeout = 500) => new Promise(resolve => {
-      const img = new Image();
-      let resolved = false;
-      const timer = setTimeout(() => {
-          if (!resolved) {
-              resolved = true;
-              resolve(false);
-          }
-      }, timeout);
-      
-      img.onload = () => {
-          if (!resolved) {
-              resolved = true;
-              clearTimeout(timer);
-              resolve(true);
-          }
-      };
-      img.onerror = () => {
-          if (!resolved) {
-              resolved = true;
-              clearTimeout(timer);
-              resolve(false);
-          }
-      };
-      img.src = url;
-  });
 
-  // Validate the initial image URL. If it fails, clear it to trigger fallback search.
   if (imageUrl) {
-      // Resolve relative path first
-      if (!imageUrl.startsWith('http') && !imageUrl.startsWith('data:')) {
-          try {
-              imageUrl = new URL(imageUrl, window.location.href).href;
-          } catch (e) {}
-      }
-      
-      const exists = await checkImage(resolveImageSrcForLoading(imageUrl), 500);
-      if (!exists) {
-          console.warn(`Image URL failed to load: ${imageUrl}. Using placeholder.`);
-          imageUrl = null; // Skip all the fallback checks, go straight to placeholder
-      }
+      imageUrl = toAbsoluteUrl(imageUrl);
   }
 
   // If no image found, use placeholder immediately
@@ -3051,10 +3041,12 @@ export async function addMonsterToScene(monster) {
       imageUrl = getPlaceholderImage(monster.name, 'monster');
   }
   
-  // Ensure URL is short enough for OBR (upload if necessary)
-  // Since we are spawning a monster, if we upload, store it in 'monsters' folder with the monster name
-  imageUrl = await ensureShortImageUrl(imageUrl, monster.name, 'monsters');
-  imageUrl = await preferLocalDataUriForObr(imageUrl, monster.name, 'monsters');
+  // Hosted URLs (Mongo static-image or external links) must stay as-is so Owlbear
+  // can fetch them. Reprocessing here used to replace slow loads with a grey token.
+  imageUrl = await ensureShortImageUrl(imageUrl, monster.name, 'monsters', { processBackground: false });
+  if (!isHostedImageUrl(imageUrl)) {
+      imageUrl = await preferLocalDataUriForObr(imageUrl, monster.name, 'monsters');
+  }
 
   console.log(`[v${EXTENSION_VERSION}] Resolved imageUrl for ${monster.name}:`, imageUrl);
 
@@ -3276,6 +3268,99 @@ export async function addMonsterToScene(monster) {
       await OBR.scene.items.addItems([item]);
       return item;
   }
+}
+
+function parseTokenStat(val, fallback = 10) {
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    if (typeof val === 'string') {
+        const match = val.match(/^(\d+)/);
+        return match ? parseInt(match[1], 10) : fallback;
+    }
+    return fallback;
+}
+
+async function assignMonsterToToken(monster, itemId) {
+    const items = await OBR.scene.items.getItems([itemId]);
+    const selectedItem = items[0];
+    if (!selectedItem || selectedItem.type !== 'IMAGE') {
+        throw new Error('Select an image token on the map first.');
+    }
+
+    let squares = 1;
+    if (monster.type) {
+        const lowerType = String(monster.type).toLowerCase();
+        if (lowerType.includes('gargantuan')) squares = 4;
+        else if (lowerType.includes('huge')) squares = 3;
+        else if (lowerType.includes('large')) squares = 2;
+    }
+
+    let imgDpi = 150;
+    let imgWidth = selectedItem.image?.width || squares * 150;
+    let imgHeight = selectedItem.image?.height || squares * 150;
+    const dims = selectedItem.image?.url ? await getImageDimensions(selectedItem.image.url) : null;
+    if (dims && dims.width && dims.height) {
+        imgWidth = dims.width;
+        imgHeight = dims.height;
+        imgDpi = Math.max(imgWidth, imgHeight) / squares;
+    }
+
+    const hpVal = parseTokenStat(monster.hp);
+    const acVal = parseTokenStat(monster.ac);
+
+    await OBR.scene.items.updateItems([selectedItem.id], (updateItems) => {
+        for (const item of updateItems) {
+            item.metadata = {
+                ...item.metadata,
+                ...monster,
+                name: monster.name,
+                hp: hpVal,
+                ac: acVal,
+                maxHp: hpVal,
+                cr: String(monster.cr || item.metadata?.cr || ''),
+                description: String(monster.description || item.metadata?.description || ''),
+                source: String(monster.source || item.metadata?.source || ''),
+                created_by: 'dnd_extension',
+            };
+
+            if (!item.text) item.text = { richText: [], style: {} };
+
+            const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
+            const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
+            const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
+            const hideCR = localStorage.getItem('dnd_extension_hide_cr') === 'true';
+
+            let newLabel = '';
+            if (!hideName) newLabel += monster.name;
+            let statsLine = '';
+            if (!hideHP) statsLine += `HP: ${hpVal}`;
+            if (!hideHP && !hideAC) statsLine += ' ';
+            if (!hideAC) statsLine += `AC: ${acVal}`;
+            if ((!hideHP || !hideAC) && !hideCR && monster.cr !== undefined) statsLine += ' ';
+            if (!hideCR && monster.cr !== undefined) statsLine += `CR: ${monster.cr}`;
+            if (statsLine) {
+                if (newLabel) newLabel += '\n';
+                newLabel += statsLine;
+            }
+            item.text.plainText = newLabel;
+
+            if (!item.text.style) item.text.style = {};
+            item.text.style.fillColor = '#ffffff';
+            item.text.style.strokeColor = '#000000';
+            item.text.style.strokeWidth = 2;
+            item.text.style.fontSize = 24;
+            item.text.style.fontFamily = 'sans-serif';
+            item.text.style.textAlign = 'CENTER';
+            item.text.style.textAlignVertical = 'BOTTOM';
+
+            if (!item.grid) item.grid = { dpi: 150, offset: { x: 0, y: 0 } };
+            item.image.width = imgWidth;
+            item.image.height = imgHeight;
+            item.grid.dpi = imgDpi;
+            item.scale = { x: 1, y: 1 };
+        }
+    });
+
+    return squares;
 }
 
   // Helper: Add Item to Scene
@@ -4163,6 +4248,9 @@ export function searchItems(query) {
       </div>
 
       <div id="search-view" style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+        <div id="assign-stats-banner" style="display: none; margin-bottom: 8px; padding: 8px; background: #1b4d3e; color: #fff; border-radius: 4px; font-size: 0.85em;">
+            Select a monster to assign HP, AC, and stats to the token on the map. The token image will stay the same.
+        </div>
         <div style="display: flex; gap: 5px; margin-bottom: 5px;">
             <input type="text" id="search-input" placeholder="Search..." style="flex: 1; padding: 5px; box-sizing: border-box;">
             <button id="random-btn" style="display: none; padding: 0 10px; font-weight: bold; font-size: 1.2em; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px;" title="Pick Random Item">🎲</button>
@@ -4318,6 +4406,8 @@ export function searchItems(query) {
   `;
 
   let activeTab = isGM ? 'monsters' : 'items'; // Default to items for non-GM
+  let assignStatsMode = searchParams.get('assignStats') === '1';
+  const assignTargetItemId = searchParams.get('itemId');
 
   const tabMonsters = document.getElementById('tab-monsters');
   const tabItems = document.getElementById('tab-items');
@@ -4331,6 +4421,13 @@ export function searchItems(query) {
   const quickAoeSize = document.getElementById('quick-aoe-size');
   
   const input = document.getElementById('search-input');
+  const assignBanner = document.getElementById('assign-stats-banner');
+  const showAssignBanner = (visible) => {
+      assignStatsMode = visible;
+      if (assignBanner) assignBanner.style.display = visible && isGM ? 'block' : 'none';
+      if (visible && isGM && input) input.placeholder = 'Search a monster to assign stats...';
+  };
+  if (assignStatsMode) showAssignBanner(true);
   const searchNameOnlyCheckbox = isGM ? document.getElementById('search-name-only') : null;
   const minCrInput = isGM ? document.getElementById('min-cr-input') : null;
   const maxCrInput = isGM ? document.getElementById('max-cr-input') : null;
@@ -5473,6 +5570,9 @@ export function searchItems(query) {
   if (targetItemId) {
       popoverUrl += '&itemId=' + targetItemId;
   }
+  if (assignStatsMode) {
+      popoverUrl += '&assignStats=1';
+  }
   if (spawnPosition) {
       popoverUrl += `&spawnX=${spawnPosition.x}&spawnY=${spawnPosition.y}`;
   }
@@ -5937,6 +6037,43 @@ export function searchItems(query) {
     }
   });
 
+  const handleMonsterClick = async (monster) => {
+      try {
+            let selection = await OBR.player.getSelection();
+            
+            if ((!selection || selection.length === 0)) {
+                const ctxItemId = assignTargetItemId || new URLSearchParams(window.location.search).get('itemId');
+                if (ctxItemId) {
+                    selection = [ctxItemId];
+                }
+            }
+
+            if (selection && selection.length === 1) {
+                const items = await OBR.scene.items.getItems(selection);
+                const selectedItem = items[0];
+
+                if (selectedItem && selectedItem.type === 'IMAGE') {
+                    const shouldAssign = assignStatsMode || confirm(`Assign stats for "${monster.name}" to the selected token? The current image will be kept.`);
+                    if (shouldAssign) {
+                        const squares = await assignMonsterToToken(monster, selectedItem.id);
+                        alert(`Assigned "${monster.name}" to the selected token (${squares}x${squares} squares).`);
+                        return;
+                    }
+                }
+            }
+
+            if (assignStatsMode) {
+                alert('No map token is selected. Right-click a token and choose Assign Stats.');
+                return;
+            }
+
+            await addMonsterToScene(monster);
+        } catch (e) {
+            console.error("Failed to add/assign monster:", e);
+            alert(`Error: ${e.message || JSON.stringify(e)}`);
+        }
+  };
+
   const showStats = (data, itemId) => {
     const isSpell = data.level !== undefined || data.school !== undefined || (data.aoe !== undefined);
     const isItem = !isSpell && (!data.hp && !data.ac);
@@ -6049,6 +6186,7 @@ export function searchItems(query) {
                </div>`
             : `<button id="edit-btn" style="width: 100%; margin-bottom: 5px; background-color: #2196F3; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Edit / Rename</button>
                <button id="add-to-scene-btn" style="width: 100%; margin-bottom: 5px; background-color: #4CAF50; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Add to Scene</button>
+               <button id="assign-to-token-btn" style="width: 100%; margin-bottom: 5px; background-color: #1b4d3e; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Assign Stats to Selected Token</button>
                <button id="share-description-btn" style="width: 100%; margin-bottom: 5px; background-color: #FF9800; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Share to Map (Note)</button>
                <button id="delete-item-btn" style="width: 100%; margin-bottom: 10px; background-color: #d32f2f; color: white; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">Delete from List</button>
                <div style="margin-top: 5px;"><strong>HP:</strong> ${data.hp} | <strong>AC:</strong> ${data.ac}</div>`;
@@ -6553,8 +6691,20 @@ export function searchItems(query) {
 
     // Add to Scene Listener (for Monsters)
     const addToSceneBtn = document.getElementById('add-to-scene-btn');
+    const assignToTokenBtn = document.getElementById('assign-to-token-btn');
+    if (assignToTokenBtn) {
+        assignToTokenBtn.addEventListener('click', async () => {
+            assignStatsMode = true;
+            showAssignBanner(true);
+            await handleMonsterClick(data);
+        });
+    }
     if (addToSceneBtn) {
         addToSceneBtn.addEventListener('click', async () => {
+            if (assignStatsMode) {
+                await handleMonsterClick(data);
+                return;
+            }
             // Create a modal dialog for preview/edit
             const modalHtml = `
                 <div id="place-preview-modal" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 999999; color: #fff;">
@@ -7608,148 +7758,6 @@ export function searchItems(query) {
       return 10;
   };
 
-  const handleMonsterClick = async (monster) => {
-      // Reuse existing monster click logic
-      try {
-            let selection = await OBR.player.getSelection();
-            
-            // If no manual selection, check if we were opened via context menu for a specific item
-            if ((!selection || selection.length === 0)) {
-                const searchParams = new URLSearchParams(window.location.search);
-                const ctxItemId = searchParams.get('itemId');
-                if (ctxItemId) {
-                    selection = [ctxItemId];
-                }
-            }
-
-            // Check if user has selected exactly one item that is an IMAGE
-            if (selection && selection.length === 1) {
-                const items = await OBR.scene.items.getItems(selection);
-                const selectedItem = items[0];
-
-                if (selectedItem && selectedItem.type === 'IMAGE') {
-                    // Ask user if they want to assign this monster to the selected image
-                    if (confirm(`Assign stats for "${monster.name}" to the selected image?`)) {
-                        
-                        // 1. Determine size in squares
-                        let squares = 1;
-                        if (monster.type) {
-                            const lowerType = monster.type.toLowerCase();
-                            if (lowerType.includes('gargantuan')) squares = 4;
-                            else if (lowerType.includes('huge')) squares = 3;
-                            else if (lowerType.includes('large')) squares = 2;
-                        }
-
-                        // 2. Calculate DPI based on ACTUAL image dimensions (to prevent artifacts/disappearing)
-                        let imgDpi = 150; // Default fallback
-                        let imgWidth = selectedItem.image.width;
-                        let imgHeight = selectedItem.image.height;
-
-                        // Try to get natural dimensions if possible
-                        const dims = await getImageDimensions(selectedItem.image.url);
-                        if (dims && dims.width && dims.height) {
-                            imgWidth = dims.width;
-                            imgHeight = dims.height;
-                            const maxDim = Math.max(imgWidth, imgHeight);
-                            imgDpi = maxDim / squares;
-                        } else {
-                             imgDpi = 150;
-                        }
-
-                        // 3. Save this image association for future adds of this monster
-                        const safeUrl = await ensureShortImageUrl(selectedItem.image.url);
-                        syncEntryImageToLibrary(monster.name, safeUrl, 'monster');
-
-                        // 4. Update the item
-                        await OBR.scene.items.updateItems([selectedItem.id], (items) => {
-                            for (let item of items) {
-                                // Update metadata
-                                const hpVal = parseStat(monster.hp);
-                                const acVal = parseStat(monster.ac);
-                                item.metadata = { 
-                                    ...item.metadata, 
-                                    ...monster, 
-                                    hp: hpVal,
-                                    ac: acVal,
-                                    maxHp: hpVal,
-                                    created_by: 'dnd_extension' 
-                                };
-                                
-                                // Update image URL if we optimized it
-                                if (safeUrl !== selectedItem.image.url) {
-                                    item.image.url = safeUrl;
-                                }
-                                
-                                // Update text label safely
-                                if (!item.text) {
-                                    item.text = {
-                                        richText: [], 
-                                        style: {}
-                                    };
-                                }
-                                
-                                // Respect hide settings
-                                const hideName = localStorage.getItem('dnd_extension_hide_name') === 'true';
-                                const hideHP = localStorage.getItem('dnd_extension_hide_hp') === 'true';
-                                const hideAC = localStorage.getItem('dnd_extension_hide_ac') === 'true';
-
-                                let newLabel = "";
-                                if (!hideName) newLabel += monster.name;
-                                
-                                let statsLine = "";
-                                if (!hideHP) statsLine += `HP: ${hpVal}`;
-                                if (!hideHP && !hideAC) statsLine += " ";
-                                if (!hideAC) statsLine += `AC: ${acVal}`;
-                                
-                                if (statsLine) {
-                                    if (newLabel) newLabel += "\n";
-                                    newLabel += statsLine;
-                                }
-                                item.text.plainText = newLabel;
-                                // Note: item.text.visible is not a valid property on IMAGE items
-                                
-                                if (!item.text.style) item.text.style = {};
-                                item.text.style.fillColor = "#ffffff";
-                                item.text.style.strokeColor = "#000000";
-                                item.text.style.strokeWidth = 2;
-                                item.text.style.fontSize = 24;
-                                item.text.style.fontFamily = "sans-serif";
-                                item.text.style.textAlign = "CENTER";
-                                item.text.style.textAlignVertical = "BOTTOM";
-
-                                // Apply resizing (DPI adjustment)
-                                if (!item.grid) item.grid = { dpi: 150, offset: { x: 0, y: 0 } };
-                                
-                                if (dims) {
-                                    item.image.width = imgWidth;
-                                    item.image.height = imgHeight;
-                                    item.grid.dpi = imgDpi;
-                                } else {
-                                    // Fallback resize logic if we couldn't get true dims
-                                    item.image.width = squares * 150;
-                                    item.image.height = squares * 150;
-                                    item.grid.dpi = 150;
-                                }
-                                
-                                // Reset scale to avoid distortion from previous manual resizing
-                                item.scale = { x: 1, y: 1 };
-                            }
-                        });
-
-                        alert(`Assigned "${monster.name}" to selected image and resized to ${squares}x${squares} squares.`);
-                        return; // Done
-                    }
-                }
-            }
-
-            // Default behavior: Add new token
-            await addMonsterToScene(monster);
-        } catch (e) {
-            console.error("Failed to add/assign monster:", e);
-            alert(`Error: ${e.message || JSON.stringify(e)}`);
-        }
-  };
-
     // Add click listeners
     const cards = resultsDiv.querySelectorAll('.result-card');
     cards.forEach((card) => {
@@ -7762,7 +7770,11 @@ export function searchItems(query) {
             const maxCr = maxCrInput ? maxCrInput.value.trim() : '';
             const results = searchMonsters(query, searchNameOnly, minCr, maxCr);
             const monster = results[index];
-            showStats(monster);
+            if (assignStatsMode) {
+                await handleMonsterClick(monster);
+            } else {
+                showStats(monster);
+            }
         } else if (activeTab === 'items') {
             const results = searchItems(query);
             const item = results[index];
@@ -7777,7 +7789,12 @@ export function searchItems(query) {
                 const customItems = getCustomItems();
                 const customSpells = getCustomSpells();
                 const allCustom = [...customMonsters.map(m => ({...m, type: 'Monster'})), ...customItems.map(i => ({...i, type: 'Item'})), ...customSpells.map(s => ({...s, type: 'Spell'}))];
-                showStats(allCustom[index]);
+                const picked = allCustom[index];
+                if (assignStatsMode && picked && (picked.hp !== undefined || picked.ac !== undefined)) {
+                    await handleMonsterClick(picked);
+                } else {
+                    showStats(picked);
+                }
             } else {
                 const customItems = getCustomItems();
                 const customSpells = getCustomSpells();
@@ -7842,6 +7859,11 @@ export function searchItems(query) {
                              item.metadata.created_by === 'dnd_extension' || 
                              (item.metadata.hp !== undefined && item.metadata.ac !== undefined)
                          );
+
+                         if (assignStatsMode && item.type === 'IMAGE') {
+                            showAssignBanner(true);
+                            return;
+                         }
                          
                          if (isExtensionObj) {
                             // If it's a monster and not GM, skip
@@ -7865,9 +7887,8 @@ export function searchItems(query) {
                               source: m.source
                             }, item.id);
                          } else {
-                             // Feedback if not a valid monster
                              if (item.type === 'IMAGE') {
-                                 console.log("Selected item is a raw image (not a monster token). Search for a monster to assign stats.");
+                                 showAssignBanner(true);
                              } else {
                                  console.log("Selected item is not a recognized extension object:", item);
                              }
@@ -8175,6 +8196,56 @@ if (window.self === window.top) {
             console.log("Context menu created successfully");
         } catch (e) {
             console.error("Error creating context menu:", e);
+        }
+
+        try {
+            await OBR.contextMenu.create({
+                id: 'com.dnd-extension.assign-stats-menu',
+                icons: [
+                    {
+                        icon: ICON_SVG,
+                        label: 'Assign Stats',
+                        filter: {
+                            min: 1,
+                            max: 1,
+                            roles: ['GM'],
+                            every: [
+                                { key: 'type', value: 'IMAGE' },
+                            ],
+                        },
+                    },
+                ],
+                onClick: async (context) => {
+                    const itemId = context.items.length > 0 ? context.items[0].id : null;
+                    if (!itemId) return;
+
+                    let extraParams = `&assignStats=1&itemId=${itemId}`;
+                    try {
+                        const items = await OBR.scene.items.getItems([itemId]);
+                        if (items.length > 0 && items[0].position) {
+                            extraParams += `&spawnX=${items[0].position.x}&spawnY=${items[0].position.y}`;
+                        }
+                    } catch (e) {
+                        console.warn('Could not fetch item position for assign stats:', e);
+                    }
+
+                    const storedPos = localStorage.getItem('dnd_extension_popover_pos');
+                    const anchorPos = storedPos ? JSON.parse(storedPos) : { left: 200, top: 100 };
+                    await OBR.player.select([]);
+                    await new Promise((resolve) => setTimeout(resolve, 50));
+                    await OBR.popover.open({
+                        id: 'dnd-monster-search-popover',
+                        url: `/index.html?mode=popover${extraParams}&t=${Date.now()}`,
+                        height: 600,
+                        width: 400,
+                        anchorReference: 'POSITION',
+                        anchorPosition: anchorPos,
+                    });
+                },
+            });
+            console.log("Assign stats context menu created successfully");
+        } catch (e) {
+            console.error("Error creating assign stats context menu:", e);
         }
 
         // Create Tool and Mode for Spawning
